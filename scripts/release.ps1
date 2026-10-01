@@ -15,9 +15,8 @@ param(
     [Parameter(Mandatory)][string]$Tag,
     [Parameter(Mandatory)][string]$Token
 )
-$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'cargo.ps1')
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
-$manifest = Join-Path $root 'Cargo.toml'
 
 $version = (cargo metadata --manifest-path $manifest --no-deps --format-version 1 | ConvertFrom-Json).packages |
     Where-Object name -EQ 'carronade' |
@@ -29,10 +28,7 @@ if ($Tag -ne "v$version") {
     throw "tag $Tag does not match version $version in $manifest"
 }
 
-& cargo build --manifest-path $manifest --release
-if ($LASTEXITCODE -ne 0) {
-    throw "cargo build --release failed with exit code $LASTEXITCODE"
-}
+Invoke-Cargo @('build', '--manifest-path', $manifest, '--release')
 
 $staging = Join-Path $root "target\release-package\carronade-$Tag"
 $zip = Join-Path $root "target\carronade-$Tag-x86_64-pc-windows-msvc.zip"
