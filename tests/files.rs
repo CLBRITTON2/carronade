@@ -115,7 +115,8 @@ fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome
         &["zet/tests/integration/run.carronadetest", "zet/run.txt"],
     )?;
     let config = root.with_extension("toml");
-    let shipped = std::fs::read_to_string(CONFIG)?;
+    // A checkout with core.autocrlf, as on the CI runner, has CRLF line ends.
+    let shipped = std::fs::read_to_string(CONFIG)?.replace("\r\n", "\n");
     let roots = "roots = ['~\\dev']\ncache = true";
     let drun = "[drun]\ncache = true";
     for section in [roots, drun] {
