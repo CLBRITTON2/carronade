@@ -3,6 +3,11 @@ name = "carronade"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "A keyboard launcher for Windows: Start menu apps, files and dmenu-style picks from stdin"
+repository = "https://github.com/CLBRITTON2/carronade"
+readme = "README.md"
+keywords = ["launcher", "windows", "dmenu", "glazewm"]
+categories = ["command-line-utilities", "gui"]
 
 [dependencies]
 ignore = "0.4.33"

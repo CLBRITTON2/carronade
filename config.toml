@@ -6,14 +6,15 @@
 family = "Segoe UI"
 size = 11
 
-# The popup. image, the only optional field, is cover-scaled behind everything else.
+# The popup. image, the only optional field, is cover-scaled behind everything else. A path in image or files.roots
+# can start with ~ for your profile folder.
 [window]
 width = "40em"
 background = "#202020"
 border = "1px"
 border_color = "#ffffff33"
 radius = "0.5em"
-# image = 'C:\Users\you\Pictures\wallpaper.jpg'
+# image = '~\Pictures\wallpaper.jpg'
 
 # The text box at the top. prompt is drawn left of the typed text in prompt_font. drun and files draw files_icon or
 # apps_icon at its right end, in prompt_font and placeholder_color: a click on it, or Tab, switches to the other list.
@@ -56,5 +57,5 @@ cache = true
 # The file search mode. It lists every file and folder below roots, leaving out what git ignores and hidden ones.
 # cache works as drun's does, kept in %LOCALAPPDATA%\carronade\files.toml.
 [files]
-roots = ['C:\Users\you\dev']
+roots = ['~\dev']
 cache = true

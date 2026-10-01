@@ -43,7 +43,7 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI,
@@ -697,13 +697,24 @@ fn clipboard_text(format: u32) -> Result<String, Error> {
     if data.is_null() {
         return Err(last("GlobalLock"));
     }
-    let len = (0..)
-        .take_while(|&at| unsafe { *data.add(at) } != 0)
-        .count();
-    let text = String::from_utf16(unsafe { std::slice::from_raw_parts(data, len) });
+    let text = locked_text(global, data);
     // GlobalUnlock reports releasing the last lock as a failure, so its result says nothing.
     _ = unsafe { GlobalUnlock(global) };
-    Ok(text?)
+    text
+}
+
+/// The text up to the first NUL in the locked `data`, within its block: another program can set one without a NUL.
+fn locked_text(global: HGLOBAL, data: *const u16) -> Result<String, Error> {
+    let units = unsafe { GlobalSize(global) } / size_of::<u16>();
+    if units == 0 {
+        return Err(last("GlobalSize"));
+    }
+    let block = unsafe { std::slice::from_raw_parts(data, units) };
+    let text = match block.iter().position(|&unit| unit == 0) {
+        Some(len) => block.split_at(len).0,
+        None => block,
+    };
+    Ok(String::from_utf16(text)?)
 }
 
 /// Records the outcome for `pump`, keeping the first when two arrive before it looks.
@@ -1043,4 +1054,34 @@ fn d2d_color(color: Color) -> D2D1_COLOR_F {
 fn held(key: VIRTUAL_KEY) -> bool {
     let state = unsafe { GetKeyState(i32::from(key.0)) };
     state < 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Foundation::GlobalFree;
+    use windows::Win32::System::Memory::{GHND, GlobalAlloc};
+
+    /// `locked_text` of a block holding `units`, zero-filled past them as `GlobalAlloc` leaves it.
+    fn text_of(units: &[u16]) -> Result<String, Box<dyn std::error::Error>> {
+        let global = unsafe { GlobalAlloc(GHND, size_of_val(units)) }?;
+        let data = unsafe { GlobalLock(global) }.cast::<u16>();
+        if data.is_null() {
+            return Err("GlobalLock failed".into());
+        }
+        unsafe { std::ptr::copy_nonoverlapping(units.as_ptr(), data, units.len()) };
+        let text = locked_text(global, data);
+        _ = unsafe { GlobalUnlock(global) };
+        // GlobalFree returns NULL on success, which windows-rs reports as an error, so its result says nothing.
+        _ = unsafe { GlobalFree(Some(global)) };
+        Ok(text?)
+    }
+
+    #[test]
+    fn pasted_text_ends_at_its_nul_or_its_block() -> Result<(), Box<dyn std::error::Error>> {
+        let units = |text: &str| -> Vec<u16> { text.encode_utf16().collect() };
+        assert_eq!(text_of(&units("ab\0cd"))?, "ab");
+        assert_eq!(text_of(&units("abc"))?, "abc");
+        Ok(())
+    }
 }

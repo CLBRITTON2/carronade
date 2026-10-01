@@ -116,7 +116,7 @@ fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome
     )?;
     let config = root.with_extension("toml");
     let shipped = std::fs::read_to_string(CONFIG)?;
-    let roots = "roots = ['C:\\Users\\you\\dev']\ncache = true";
+    let roots = "roots = ['~\\dev']\ncache = true";
     let drun = "[drun]\ncache = true";
     for section in [roots, drun] {
         if !shipped.contains(section) {

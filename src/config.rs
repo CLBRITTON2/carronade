@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::UI::Shell::{FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+use windows::Win32::UI::Shell::{
+    FOLDERID_Profile, FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+};
 use windows::core::GUID;
 
 use crate::error::{Error, win32};
@@ -183,15 +185,42 @@ impl TryFrom<String> for Color {
     }
 }
 
+/// The config at `path`, with a leading `~` in `window.image` and `files.roots` meaning the user's profile folder.
 pub fn load(path: &Path) -> Result<Config, Error> {
     let text = std::fs::read_to_string(path).map_err(|source| Error::ConfigRead {
         path: path.to_owned(),
         source,
     })?;
-    toml::from_str(&text).map_err(|source| Error::ConfigParse {
+    let config: Config = toml::from_str(&text).map_err(|source| Error::ConfigParse {
         path: path.to_owned(),
         source: Box::new(source),
+    })?;
+    let home = known_folder(&FOLDERID_Profile)?;
+    Ok(Config {
+        window: Window {
+            image: config.window.image.map(|image| under_home(&image, &home)),
+            ..config.window
+        },
+        files: Files {
+            roots: config
+                .files
+                .roots
+                .iter()
+                .map(|root| under_home(root, &home))
+                .collect(),
+            ..config.files
+        },
+        ..config
     })
+}
+
+/// `path` with a leading `~` component replaced by `home`.
+fn under_home(path: &Path, home: &Path) -> PathBuf {
+    match path.strip_prefix("~") {
+        Ok(rest) if rest.as_os_str().is_empty() => home.to_owned(),
+        Ok(rest) => home.join(rest),
+        Err(_) => path.to_owned(),
+    }
 }
 
 /// `%APPDATA%\carronade\config.toml`, the config read when no `--config` is given.
@@ -262,6 +291,24 @@ mod tests {
         let config: Config = toml::from_str(include_str!("../config.toml"))?;
         assert_eq!(config.window.image, None);
         Ok(())
+    }
+
+    #[test]
+    fn a_leading_tilde_is_the_home_folder() {
+        let home = Path::new("C:\\Users\\you");
+        let expanded = ["~", "~\\dev", "~/dev/x", "~dev", "C:\\~\\dev", "dev"]
+            .map(|path| under_home(Path::new(path), home));
+        assert_eq!(
+            expanded.each_ref().map(|path| path.to_str()),
+            [
+                Some("C:\\Users\\you"),
+                Some("C:\\Users\\you\\dev"),
+                Some("C:\\Users\\you\\dev/x"),
+                Some("~dev"),
+                Some("C:\\~\\dev"),
+                Some("dev"),
+            ]
+        );
     }
 
     #[test]
