@@ -1,17 +1,21 @@
 //! The Start menu's apps, the list `Get-StartApps` prints, and launching them.
 
+use windows::Win32::Foundation::SIZE;
+use windows::Win32::Graphics::Gdi::HBITMAP;
 use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, IBindCtx,
 };
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, KF_FLAG_DEFAULT,
-    SEE_MASK_FLAG_NO_UI, SHELLEXECUTEINFOW, SHGetKnownFolderItem, SIGDN, SIGDN_NORMALDISPLAY,
-    SIGDN_PARENTRELATIVEPARSING, ShellExecuteExW,
+    BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, IShellItemImageFactory,
+    KF_FLAG_DEFAULT, SEE_MASK_FLAG_NO_UI, SHCreateItemFromParsingName, SHELLEXECUTEINFOW,
+    SHGetKnownFolderItem, SIGDN, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING, SIIGBF_ICONONLY,
+    ShellExecuteExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-use windows::core::PCWSTR;
+use windows::core::{HSTRING, PCWSTR};
 
 use crate::error::{Error, win32};
+use crate::picker::Row;
 
 pub struct App {
     pub name: String,
@@ -25,9 +29,13 @@ impl App {
     }
 }
 
-impl AsRef<str> for App {
-    fn as_ref(&self) -> &str {
+impl Row for App {
+    fn label(&self) -> &str {
         &self.name
+    }
+
+    fn icon(&self) -> Option<String> {
+        Some(self.target())
     }
 }
 
@@ -69,6 +77,18 @@ pub fn launch(target: &str) -> Result<(), Error> {
         target: target.to_owned(),
         source,
     })
+}
+
+/// The icon the shell shows for `target`, at most `size` px square, as a 32-bit bitmap with premultiplied alpha.
+pub fn icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
+    com()?;
+    let icon = |source| Error::Icon {
+        target: target.to_owned(),
+        source,
+    };
+    let factory: IShellItemImageFactory =
+        unsafe { SHCreateItemFromParsingName(&HSTRING::from(target), None) }.map_err(icon)?;
+    unsafe { factory.GetImage(SIZE { cx: size, cy: size }, SIIGBF_ICONONLY) }.map_err(icon)
 }
 
 /// The shell needs COM on the calling thread. A second call on the same thread is a no-op.

@@ -8,11 +8,12 @@ use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DC_BRUSH, DC_PEN,
-    DEFAULT_CHARSET, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DrawTextW, FW_NORMAL,
-    FillRect, GetMonitorInfoW, GetStockObject, HBRUSH, HDC, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow, OUT_DEFAULT_PRECIS, RoundRect, SelectObject, SetBkColor, SetBkMode,
-    SetDCBrushColor, SetDCPenColor, SetTextColor, TRANSPARENT,
+    AC_SRC_ALPHA, AC_SRC_OVER, AlphaBlend, BITMAP, BLENDFUNCTION, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateFontW, CreateSolidBrush, DC_BRUSH, DC_PEN,
+    DEFAULT_CHARSET, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteDC, DrawTextW,
+    FW_NORMAL, FillRect, GetMonitorInfoW, GetObjectW, GetStockObject, HBITMAP, HBRUSH, HDC,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, OUT_DEFAULT_PRECIS, RoundRect,
+    SelectObject, SetBkColor, SetBkMode, SetDCBrushColor, SetDCPenColor, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, EM_GETSEL, EM_SETSEL, ODS_SELECTED};
@@ -36,6 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
+use crate::apps;
 use crate::error::{Error, last, win32};
 use crate::menu::{self, Choice};
 
@@ -53,6 +55,7 @@ const ROWS: i32 = 10;
 const PAD: i32 = 8;
 const INSET: i32 = 10;
 const RADIUS: i32 = 8;
+const ICON: i32 = 24;
 const FONT_SIZE: i32 = 18;
 const LINE_HEIGHT: i32 = 24;
 
@@ -60,8 +63,31 @@ const fn rgb(red: u8, green: u8, blue: u8) -> COLORREF {
     COLORREF(red as u32 | (green as u32) << 8 | (blue as u32) << 16)
 }
 
+/// What the picker shows for an item: its label, and the shell target whose icon goes beside it.
+pub trait Row {
+    fn label(&self) -> &str;
+    fn icon(&self) -> Option<String>;
+}
+
+impl Row for String {
+    fn label(&self) -> &str {
+        self
+    }
+
+    fn icon(&self) -> Option<String> {
+        None
+    }
+}
+
+#[derive(Clone)]
+enum Icon {
+    Unloaded(String),
+    Loaded(HBITMAP),
+}
+
 struct State {
     items: Vec<String>,
+    icons: Vec<Option<Icon>>,
     shown: Vec<usize>,
     cursor: usize,
     edit: HWND,
@@ -76,8 +102,12 @@ thread_local! {
 }
 
 /// Shows `items` under a query line until one is picked. Call it once per process: it registers the window class.
-pub fn pick<T: AsRef<str>>(items: Vec<T>) -> Result<Choice<T>, Error> {
-    let window = open(items.iter().map(|item| item.as_ref().to_owned()).collect())?;
+pub fn pick<T: Row>(items: Vec<T>) -> Result<Choice<T>, Error> {
+    let (labels, icons) = items
+        .iter()
+        .map(|item| (item.label().to_owned(), item.icon().map(Icon::Unloaded)))
+        .unzip();
+    let window = open(labels, icons)?;
     let mut message = MSG::default();
     loop {
         match unsafe { GetMessageW(&mut message, None, 0, 0) }.0 {
@@ -112,7 +142,7 @@ pub fn pick<T: AsRef<str>>(items: Vec<T>) -> Result<Choice<T>, Error> {
     }
 }
 
-fn open(items: Vec<String>) -> Result<HWND, Error> {
+fn open(items: Vec<String>, icons: Vec<Option<Icon>>) -> Result<HWND, Error> {
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
         .map_err(win32("SetProcessDpiAwarenessContext"))?;
     let monitor = unsafe { MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST) };
@@ -235,6 +265,7 @@ fn open(items: Vec<String>) -> Result<HWND, Error> {
     let len = items.len();
     STATE.set(Some(State {
         items,
+        icons,
         shown: (0..len).collect(),
         cursor: 0,
         edit,
@@ -446,16 +477,15 @@ fn color(hdc: HDC) -> LRESULT {
 fn draw(item: &DRAWITEMSTRUCT) -> Result<(), Error> {
     let row = item.itemID as usize;
     let label = with(|state| {
-        let label = state
-            .shown
-            .get(row)
-            .and_then(|&index| state.items.get(index));
-        label.map(|label| (label.encode_utf16().collect::<Vec<u16>>(), state.dpi))
+        let index = state.shown.get(row).copied()?;
+        let label = state.items.get(index)?;
+        Some((index, label.encode_utf16().collect::<Vec<u16>>(), state.dpi))
     })?;
     // No label for the focus rectangle of an empty list.
-    let Some((mut label, dpi)) = label else {
+    let Some((index, mut label, dpi)) = label else {
         return Ok(());
     };
+    let icon = icon(index, dpi)?;
     let hdc = item.hDC;
     let mut rect = item.rcItem;
     unsafe {
@@ -485,6 +515,12 @@ fn draw(item: &DRAWITEMSTRUCT) -> Result<(), Error> {
         SetTextColor(hdc, FOREGROUND);
         rect.left += scale(INSET, dpi);
         rect.right -= scale(INSET, dpi);
+        if let Some(bitmap) = icon {
+            let size = scale(ICON, dpi);
+            let top = rect.top + (rect.bottom - rect.top - size) / 2;
+            blend(hdc, bitmap, rect.left, top, size)?;
+            rect.left += size + scale(INSET, dpi);
+        }
         if !label.is_empty()
             && DrawTextW(
                 hdc,
@@ -497,6 +533,62 @@ fn draw(item: &DRAWITEMSTRUCT) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// The icon of item `index`, loaded on its first draw so opening skips the icons of rows never shown.
+fn icon(index: usize, dpi: i32) -> Result<Option<HBITMAP>, Error> {
+    let target = match with(|state| state.icons.get(index).cloned().flatten())? {
+        None => return Ok(None),
+        Some(Icon::Loaded(bitmap)) => return Ok(Some(bitmap)),
+        Some(Icon::Unloaded(target)) => target,
+    };
+    let bitmap = apps::icon(&target, scale(ICON, dpi))?;
+    with(|state| {
+        if let Some(slot) = state.icons.get_mut(index) {
+            *slot = Some(Icon::Loaded(bitmap));
+        }
+    })?;
+    Ok(Some(bitmap))
+}
+
+/// Draws `bitmap` scaled into the `size` px square at `x`, `y`, keeping its transparency.
+fn blend(hdc: HDC, bitmap: HBITMAP, x: i32, y: i32, size: i32) -> Result<(), Error> {
+    let mut info = BITMAP::default();
+    let bytes = size_of::<BITMAP>() as i32;
+    if unsafe { GetObjectW(bitmap.into(), bytes, Some((&raw mut info).cast())) } != bytes {
+        return Err(last("GetObjectW"));
+    }
+    let source = unsafe { CreateCompatibleDC(Some(hdc)) };
+    if source.is_invalid() {
+        return Err(last("CreateCompatibleDC"));
+    }
+    let function = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+    let drawn = unsafe {
+        let previous = SelectObject(source, bitmap.into());
+        let drawn = AlphaBlend(
+            hdc,
+            x,
+            y,
+            size,
+            size,
+            source,
+            0,
+            0,
+            info.bmWidth,
+            info.bmHeight,
+            function,
+        );
+        SelectObject(source, previous);
+        drawn
+    };
+    let deleted = unsafe { DeleteDC(source) };
+    drawn.ok().map_err(win32("AlphaBlend"))?;
+    deleted.ok().map_err(win32("DeleteDC"))
 }
 
 fn held(key: VIRTUAL_KEY) -> bool {

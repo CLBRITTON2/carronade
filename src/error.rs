@@ -20,6 +20,12 @@ pub enum Error {
         #[source]
         source: windows::core::Error,
     },
+    #[error("loading the icon of {target:?} failed: {source}")]
+    Icon {
+        target: String,
+        #[source]
+        source: windows::core::Error,
+    },
     #[error("Windows refused to bring the picker to the foreground")]
     Foreground,
     #[error("the picker window got a message before its state was set")]

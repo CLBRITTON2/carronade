@@ -27,6 +27,24 @@ fn list_includes_packaged_apps() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn every_app_has_an_icon() -> Result<(), Box<dyn Error>> {
+    for app in apps::list()? {
+        apps::icon(&app.target(), 32)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_missing_app_has_no_icon() {
+    let target = "shell:AppsFolder\\carronade.missing_0000000000000!App";
+    let result = apps::icon(target, 32);
+    assert!(
+        matches!(&result, Err(CarronadeError::Icon { target: failed, .. }) if failed == target),
+        "got {result:?}"
+    );
+}
+
+#[test]
 fn launching_a_missing_app_names_it_in_the_error() {
     let target = "shell:AppsFolder\\carronade.missing_0000000000000!App";
     let result = apps::launch(target);
