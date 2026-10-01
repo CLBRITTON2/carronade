@@ -10,18 +10,42 @@ pub enum Choice<T> {
     Cancel,
 }
 
-/// Indices of the items that contain every whitespace-separated word of `query`, ignoring case, in input order.
+/// Indices of the items that contain every whitespace-separated word of `query`, ignoring case, best matches first.
+/// Equal matches keep their input order, which callers use for recency or depth.
 pub fn filter(items: &[String], query: &str) -> Vec<usize> {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    items
+    let mut ranked: Vec<(u32, usize)> = items
         .iter()
         .enumerate()
-        .filter(|(_, item)| {
+        .filter_map(|(index, item)| {
             let item = item.to_lowercase();
-            words.iter().all(|word| item.contains(word.as_str()))
+            let tiers: Option<Vec<u32>> = words.iter().map(|word| tier(&item, word)).collect();
+            tiers.map(|tiers| (tiers.iter().sum(), index))
         })
-        .map(|(index, _)| index)
-        .collect()
+        .collect();
+    ranked.sort_by_key(|&(rank, _)| rank);
+    ranked.into_iter().map(|(_, index)| index).collect()
+}
+
+/// How well `word` matches lowercase `item` at its best occurrence, 0 best, or `None` when it does not occur. A match
+/// in the name, the part after the last path separator, beats one in the folders, and either beats itself mid-word.
+fn tier(item: &str, word: &str) -> Option<u32> {
+    let name = item.rfind(['\\', '/']).map_or(0, |separator| separator + 1);
+    item.match_indices(word)
+        .map(|(at, _)| {
+            let in_name = at >= name;
+            let word_start = item
+                .get(..at)
+                .and_then(|before| before.chars().next_back())
+                .is_none_or(|previous| !previous.is_alphanumeric());
+            match (in_name, word_start) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
+            }
+        })
+        .min()
 }
 
 /// The row `by` rows from `cursor`, wrapping at both ends of `len` rows.
@@ -171,8 +195,33 @@ mod tests {
     }
 
     #[test]
-    fn filter_keeps_input_order() {
+    fn equal_matches_keep_input_order() {
         assert_eq!(filter(&items(&["zeta", "alpha", "beta"]), "eta"), [0, 2]);
+    }
+
+    #[test]
+    fn a_word_start_beats_a_match_mid_word() {
+        let apps = items(&["Notepad", "Paint", "Snipping Tool"]);
+        assert_eq!(filter(&apps, "pa"), [1, 0]);
+        assert_eq!(filter(&apps, "t"), [2, 0, 1]);
+    }
+
+    #[test]
+    fn a_match_in_the_name_beats_one_in_the_folders() {
+        let entries = items(&[
+            "run\\notes.md",
+            "zet\\tests\\integration\\main.go",
+            "zet\\tests\\integration\\run.ps1",
+            "zet\\prune.go",
+        ]);
+        assert_eq!(filter(&entries, "run"), [2, 3, 0]);
+        assert_eq!(filter(&entries, "integ run"), [2]);
+    }
+
+    #[test]
+    fn every_word_adds_to_the_rank() {
+        let entries = items(&["src\\domain.rs", "src\\main.rs"]);
+        assert_eq!(filter(&entries, "src main"), [1, 0]);
     }
 
     #[test]
