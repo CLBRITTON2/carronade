@@ -1,0 +1,42 @@
+# carronade reads this from %APPDATA%\carronade\config.toml, or from the path after --config.
+# Lengths are "<n>px", scaled with the monitor's DPI, or "<n>em", a multiple of the font size.
+# Colors are "#rrggbb" or "#rrggbbaa".
+
+[font]
+family = "Segoe UI Variable Text"
+size = 11
+
+[window]
+width = "45em"
+background = "#141418e0"
+border = "3px"
+border_color = "#ffffff59"
+radius = "1em"
+# image = 'C:\Users\you\Pictures\wallpaper.jpg'
+
+[input]
+margin = "3em"
+padding = "1em"
+radius = "2em"
+background = "#1c1c22eb"
+color = "#ffffff"
+prompt = "\uf061"
+prompt_font = "JetBrainsMono NFP"
+prompt_gap = "1em"
+placeholder = "Search"
+placeholder_color = "#ffffffb3"
+
+[list]
+background = "#141418e0"
+padding = "1.5em"
+spacing = "0.5em"
+columns = 2
+lines = 3
+
+[element]
+padding = "0.5em"
+radius = "1.5em"
+color = "#ffffff"
+selected = "#ffffff2e"
+icon = "3em"
+gap = "0.5em"

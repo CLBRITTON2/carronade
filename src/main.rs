@@ -1,13 +1,15 @@
 //! `carronade dmenu` prints the stdin line picked, `carronade drun` launches the Start menu app picked. Either exits 1
-//! on cancel and 2 on error.
+//! on cancel and 2 on error. `--config <path>` replaces `%APPDATA%\carronade\config.toml`.
 
 // No console window flashes up when GlazeWM starts it. Piped stdin and stdout still reach it.
 #![windows_subsystem = "windows"]
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use carronade::apps;
+use carronade::config::{self, Config};
 use carronade::error::Error;
 use carronade::menu::Choice;
 use carronade::picker::pick;
@@ -26,21 +28,36 @@ fn main() -> ExitCode {
     }
 }
 
+enum Mode {
+    Dmenu,
+    Drun,
+}
+
 /// Runs the mode `args` names, returning whether something was picked.
 fn run(args: Vec<String>) -> Result<bool, Error> {
-    match args.as_slice() {
-        [mode] if mode == "dmenu" => dmenu(),
-        [mode] if mode == "drun" => drun(),
-        _ => Err(Error::Usage(args)),
+    let (path, mode) = match args.as_slice() {
+        [mode] => (None, mode),
+        [flag, path, mode] if flag == "--config" => (Some(PathBuf::from(path)), mode),
+        _ => return Err(Error::Usage(args)),
+    };
+    let mode = match mode.as_str() {
+        "dmenu" => Mode::Dmenu,
+        "drun" => Mode::Drun,
+        _ => return Err(Error::Usage(args)),
+    };
+    let config = config::load(&path.map_or_else(config::path, Ok)?)?;
+    match mode {
+        Mode::Dmenu => dmenu(config),
+        Mode::Drun => drun(config),
     }
 }
 
-fn dmenu() -> Result<bool, Error> {
+fn dmenu(config: Config) -> Result<bool, Error> {
     let lines: Vec<String> = std::io::stdin()
         .lines()
         .collect::<Result<_, _>>()
         .map_err(Error::Stdin)?;
-    let line = match pick(lines)? {
+    let line = match pick(config, lines)? {
         Choice::Item(line) | Choice::Text(line) => line,
         Choice::Cancel => return Ok(false),
     };
@@ -48,8 +65,8 @@ fn dmenu() -> Result<bool, Error> {
     Ok(true)
 }
 
-fn drun() -> Result<bool, Error> {
-    match pick(apps::list()?)? {
+fn drun(config: Config) -> Result<bool, Error> {
+    match pick(config, apps::list()?)? {
         Choice::Item(app) => apps::launch(&app.target())?,
         Choice::Text(command) => apps::launch(&command)?,
         Choice::Cancel => return Ok(false),

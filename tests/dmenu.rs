@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_UP,
+    VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_RETURN, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CHAR, WM_KEYDOWN,
@@ -22,10 +22,32 @@ type Outcome = Result<(), Box<dyn Error>>;
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/config.toml");
+
+fn carronade(config: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_carronade"));
+    command.args(["--config", config]);
+    command
+}
+
+/// What `carronade dmenu` prints to stderr, with the shipped config edited by `change`, when it fails before opening.
+fn config_error(
+    name: &str,
+    change: impl FnOnce(String) -> String,
+) -> Result<String, Box<dyn Error>> {
+    let path = format!("{}/{name}.toml", env!("CARGO_TARGET_TMPDIR"));
+    std::fs::write(&path, change(std::fs::read_to_string(CONFIG)?))?;
+    let output = carronade(&path)
+        .arg("dmenu")
+        .stdin(Stdio::null())
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    Ok(String::from_utf8(output.stderr)?)
+}
 
 struct Picker {
     child: Child,
-    edit: HWND,
+    window: HWND,
 }
 
 struct Exit {
@@ -36,7 +58,7 @@ struct Exit {
 
 impl Picker {
     fn open(items: &str) -> Result<Self, Box<dyn Error>> {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_carronade"))
+        let mut child = carronade(CONFIG)
             .arg("dmenu")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -48,8 +70,8 @@ impl Picker {
             .take()
             .ok_or("carronade has no stdin")?
             .write_all(items.as_bytes())?;
-        let edit = query_line(child.id())?;
-        Ok(Self { child, edit })
+        let window = picker_window(child.id())?;
+        Ok(Self { child, window })
     }
 
     /// Posts each UTF-16 unit as WM_CHAR. Posted, not sent, so it stays in order with `press`, as real typing does.
@@ -65,7 +87,7 @@ impl Picker {
     }
 
     fn post(&self, message: u32, wparam: usize) -> Outcome {
-        unsafe { PostMessageW(Some(self.edit), message, WPARAM(wparam), LPARAM(0)) }?;
+        unsafe { PostMessageW(Some(self.window), message, WPARAM(wparam), LPARAM(0)) }?;
         Ok(())
     }
 
@@ -87,8 +109,8 @@ impl Picker {
     }
 }
 
-/// The query line of the visible carronade window that `pid` owns, polled for until the window shows.
-fn query_line(pid: u32) -> Result<HWND, Box<dyn Error>> {
+/// The visible carronade window that `pid` owns, polled for until it shows.
+fn picker_window(pid: u32) -> Result<HWND, Box<dyn Error>> {
     let start = Instant::now();
     while start.elapsed() < TIMEOUT {
         let mut after = None;
@@ -96,7 +118,7 @@ fn query_line(pid: u32) -> Result<HWND, Box<dyn Error>> {
             let mut owner = 0;
             unsafe { GetWindowThreadProcessId(window, Some(&mut owner)) };
             if owner == pid && unsafe { IsWindowVisible(window) }.as_bool() {
-                return Ok(unsafe { FindWindowExW(Some(window), None, w!("EDIT"), None) }?);
+                return Ok(window);
             }
             after = Some(window);
         }
@@ -228,14 +250,99 @@ fn enter_on_empty_input_cancels() -> Outcome {
 }
 
 #[test]
+fn the_caret_moves_through_the_query() -> Outcome {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let picker = Picker::open("")?;
+    picker.type_query("gmma")?;
+    for key in [VK_LEFT, VK_LEFT, VK_LEFT] {
+        picker.press(key)?;
+    }
+    picker.type_query("a")?;
+    picker.press(VK_END)?;
+    picker.type_query("!")?;
+    picker.press(VK_HOME)?;
+    picker.press(VK_DELETE)?;
+    picker.press(VK_RETURN)?;
+    picked(&picker.exit()?, "amma!");
+    Ok(())
+}
+
+#[test]
+fn backspace_removes_the_character_before_the_caret() -> Outcome {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let picker = Picker::open("zeta\n")?;
+    picker.type_query("zetaa")?;
+    picker.press(VK_BACK)?;
+    picker.press(VK_RETURN)?;
+    picked(&picker.exit()?, "zeta");
+    Ok(())
+}
+
+#[test]
 fn unknown_mode_fails_with_usage() -> Outcome {
-    let output = Command::new(env!("CARGO_BIN_EXE_carronade"))
-        .arg("show")
-        .output()?;
+    let output = carronade(CONFIG).arg("show").output()?;
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         String::from_utf8(output.stderr)?,
-        "carronade: usage: carronade <dmenu|drun>, got [\"show\"]\n"
+        format!(
+            "carronade: usage: carronade [--config <path>] <dmenu|drun>, got {:?}\n",
+            ["--config", CONFIG, "show"]
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn a_missing_config_is_named_in_the_error() -> Outcome {
+    let output = carronade("C:/carronade/missing.toml")
+        .arg("dmenu")
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.starts_with("carronade: reading the config \"C:/carronade/missing.toml\" failed: "),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_unknown_config_field_is_an_error() -> Outcome {
+    let stderr = config_error("unknown_field", |text| {
+        text.replace("[list]", "[list]\ncycle = true")
+    })?;
+    assert!(
+        stderr.contains("is invalid") && stderr.contains("cycle"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_missing_font_is_an_error() -> Outcome {
+    let stderr = config_error("missing_font", |text| {
+        text.replace(
+            "family = \"Segoe UI Variable Text\"",
+            "family = \"No Such Font\"",
+        )
+    })?;
+    assert_eq!(
+        stderr,
+        "carronade: the font family \"No Such Font\" is not installed\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_missing_image_is_an_error() -> Outcome {
+    let stderr = config_error("missing_image", |text| {
+        text.replace("# image = ", "image = 'C:\\carronade\\missing.png'\n# ")
+    })?;
+    assert!(
+        stderr.starts_with(
+            "carronade: loading the image \"C:\\\\carronade\\\\missing.png\" failed: "
+        ),
+        "{stderr}"
     );
     Ok(())
 }

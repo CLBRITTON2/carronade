@@ -1,7 +1,29 @@
+use std::path::PathBuf;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("usage: carronade <dmenu|drun>, got {0:?}")]
+    #[error("usage: carronade [--config <path>] <dmenu|drun>, got {0:?}")]
     Usage(Vec<String>),
+    #[error("reading the config {path:?} failed: {source}")]
+    ConfigRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the config {path:?} is invalid: {source}")]
+    ConfigParse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+    #[error("the font family {0:?} is not installed")]
+    Font(String),
+    #[error("loading the image {path:?} failed: {source}")]
+    Image {
+        path: PathBuf,
+        #[source]
+        source: windows::core::Error,
+    },
     #[error("reading items from stdin failed: {0}")]
     Stdin(#[source] std::io::Error),
     #[error("writing the selection to stdout failed: {0}")]
@@ -30,6 +52,8 @@ pub enum Error {
     Foreground,
     #[error("the picker window got a message before its state was set")]
     NoState,
+    #[error("the picker window got a message while handling another")]
+    Reentered,
     #[error("the picker's message loop ended without a choice")]
     NoChoice,
     #[error("the picker chose row {row} of {len} items")]

@@ -92,7 +92,7 @@ pub fn icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
 }
 
 /// The shell needs COM on the calling thread. A second call on the same thread is a no-op.
-fn com() -> Result<(), Error> {
+pub(crate) fn com() -> Result<(), Error> {
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
         .ok()
         .map_err(win32("CoInitializeEx"))
