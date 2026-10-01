@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-Builds the release exe and publishes it as the GitHub release for an existing tag.
+Builds the release exe and publishes it as the GitHub release for an existing tag, with the tag's RELEASENOTES.md
+section as its notes.
 
 .PARAMETER Tag
 The pushed tag, `v` then the version in Cargo.toml, as v0.1.0.
@@ -27,6 +28,7 @@ if ($LASTEXITCODE -ne 0) {
 if ($Tag -ne "v$version") {
     throw "tag $Tag does not match version $version in $manifest"
 }
+$notes = & (Join-Path $PSScriptRoot 'extract-version-release-notes.ps1') -Version $version
 
 Invoke-Cargo @('build', '--manifest-path', $manifest, '--release')
 
@@ -39,9 +41,11 @@ New-Item -ItemType Directory $staging | Out-Null
 $files = 'target\release\carronade.exe', 'config.toml', 'LICENSE', 'README.md'
 Copy-Item -Path ($files | ForEach-Object { Join-Path $root $_ }) -Destination $staging
 Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zip -Force
+$notesFile = Join-Path $root "target\release-package\notes-$Tag.md"
+Set-Content -Path $notesFile -Value $notes
 
 $env:GH_TOKEN = $Token
-& gh release create $Tag $zip --repo CLBRITTON2/carronade --title $Tag --generate-notes --verify-tag
+& gh release create $Tag $zip --repo CLBRITTON2/carronade --title $Tag --notes-file $notesFile --verify-tag
 if ($LASTEXITCODE -ne 0) {
     throw "gh release create $Tag failed with exit code $LASTEXITCODE"
 }
