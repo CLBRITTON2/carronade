@@ -19,7 +19,7 @@ pub type Outcome = Result<(), Box<dyn Error>>;
 // Two pickers on screen take focus from each other, and losing focus cancels one.
 pub static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-const TIMEOUT: Duration = Duration::from_secs(10);
+pub const TIMEOUT: Duration = Duration::from_secs(10);
 pub const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/config.toml");
 
 pub fn carronade(config: &str) -> Command {
