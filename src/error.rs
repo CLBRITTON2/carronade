@@ -48,6 +48,8 @@ pub enum Error {
         #[source]
         source: windows::core::Error,
     },
+    #[error("the shell's icon of {target:?} is not a 32-bit bitmap")]
+    IconBitmap { target: String },
     #[error("reading the app cache {path:?} failed: {source}")]
     CacheRead {
         path: PathBuf,

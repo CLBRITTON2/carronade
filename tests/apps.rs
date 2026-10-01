@@ -64,7 +64,7 @@ fn an_invalid_cache_names_its_path() -> Result<(), Box<dyn Error>> {
 #[test]
 fn every_app_has_an_icon() -> Result<(), Box<dyn Error>> {
     for app in apps::list()? {
-        apps::icon(&app.target(), 32)?;
+        apps::display_icon(&app.target(), 32)?;
     }
     Ok(())
 }

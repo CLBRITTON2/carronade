@@ -632,15 +632,12 @@ fn with<T>(f: impl FnOnce(&mut State) -> T) -> Result<T, Error> {
     })
 }
 
-/// The shell's largest icon size. It scales smaller requests up from coarse assets, so fetch this and scale down.
-const ICON_SOURCE: i32 = 256;
-
 /// Loads the icons of the page on show, then draws it.
 fn render() -> Result<(), Error> {
     let (pending, size) = with(|state| (state.unloaded(), state.canvas.icon_size()))?;
     for (index, target) in pending {
         // Outside the borrow: the shell pumps messages while it loads.
-        let icon = apps::icon(&target, ICON_SOURCE)?;
+        let icon = apps::display_icon(&target, size)?;
         with(|state| {
             state
                 .canvas
