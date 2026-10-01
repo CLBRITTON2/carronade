@@ -5,8 +5,6 @@ mod common;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
-use std::thread::sleep;
-use std::time::{Duration, Instant};
 
 use carronade::error::Error as CarronadeError;
 use carronade::files;
@@ -14,7 +12,7 @@ use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, SetFileAttribut
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_TAB};
 use windows::core::HSTRING;
 
-use common::{CONFIG, ONE_AT_A_TIME, Outcome, Picker, TIMEOUT, carronade};
+use common::{CONFIG, ONE_AT_A_TIME, Outcome, Picker, carronade};
 
 /// An empty folder for one test, holding the empty `files` named, with their folders.
 fn fixture(name: &str, files: &[&str]) -> Result<PathBuf, Box<dyn Error>> {
@@ -109,20 +107,10 @@ fn tab_in_drun_searches_the_files_for_the_query_typed() -> Outcome {
     })
 }
 
-/// Opens `mode` over a folder holding a deep `run.js`, with no caches, and picks it with `keys`.
+/// Opens `mode` over a folder holding a deep `run.exe`, with no caches, and picks it with `keys`.
 fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome) -> Outcome {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
-    let root = fixture(name, &["zet/tests/integration/run.js", "zet/run.txt"])?;
-    let picked = root.join("zet\\tests\\integration\\run.js");
-    let marker = root.join("picked.txt");
-    // Windows Script Host opens no window, which would take the foreground from the next test's picker.
-    let script = format!(
-        "var file = new ActiveXObject('Scripting.FileSystemObject').CreateTextFile({:?}, true);\n\
-         file.WriteLine(WScript.ScriptFullName);\n\
-         file.Close();\n",
-        marker.to_str().ok_or("path is not Unicode")?
-    );
-    std::fs::write(&picked, script)?;
+    let root = fixture(name, &["zet/tests/integration/run.exe", "zet/run.txt"])?;
     let config = root.with_extension("toml");
     // A checkout with core.autocrlf, as on the CI runner, has CRLF line ends.
     let shipped = std::fs::read_to_string(CONFIG)?.replace("\r\n", "\n");
@@ -145,26 +133,21 @@ fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome
     let picker = Picker::open(command, "")?;
     keys(&picker)?;
     let exit = picker.exit()?;
+    // An empty exe fails to start with no window, whatever the machine's file associations, so the error names the
+    // pick. Anything that opens a window takes the foreground from the next test's picker.
+    let picked = root.join("zet\\tests\\integration\\run.exe");
+    let picked = picked.to_str().ok_or("path is not Unicode")?;
     assert_eq!(
-        (exit.code, exit.stdout.as_str(), exit.stderr.as_str()),
-        (Some(0), "", "")
+        (exit.code, exit.stdout.as_str()),
+        (Some(2), ""),
+        "{}",
+        exit.stderr
     );
-    // The launched script writes its own path, so the marker names what was picked.
-    let start = Instant::now();
-    loop {
-        // WriteLine writes the line break last, so a line without it is still being written.
-        if let Ok(text) = std::fs::read_to_string(&marker)
-            && text.ends_with("\r\n")
-        {
-            assert_eq!(
-                text.trim_end(),
-                picked.to_str().ok_or("path is not Unicode")?
-            );
-            return Ok(());
-        }
-        if start.elapsed() > TIMEOUT {
-            return Err(format!("{} never wrote {}", picked.display(), marker.display()).into());
-        }
-        sleep(Duration::from_millis(20));
-    }
+    assert!(
+        exit.stderr
+            .starts_with(&format!("carronade: launching {picked:?} failed: ")),
+        "{}",
+        exit.stderr
+    );
+    Ok(())
 }
