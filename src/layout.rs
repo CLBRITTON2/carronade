@@ -42,6 +42,8 @@ pub struct Layout {
     pub input: Rect,
     pub prompt: Rect,
     pub entry: Rect,
+    /// Where the switch icon goes at the bar's right end, kept clear in every mode.
+    pub switch: Rect,
     pub list: Rect,
     /// Column by column, as the matches fill them.
     pub cells: Vec<Cell>,
@@ -51,11 +53,28 @@ impl Layout {
     pub fn cell_at(&self, x: f32, y: f32) -> Option<usize> {
         self.cells.iter().position(|cell| cell.area.contains(x, y))
     }
+
+    /// Whether a point is on the switch icon, taken as the bar's full height from the icon to the bar's right edge.
+    pub fn on_switch(&self, x: f32, y: f32) -> bool {
+        Rect {
+            left: self.switch.left,
+            ..self.input
+        }
+        .contains(x, y)
+    }
 }
 
 /// Lays out `config` for a font `em` px tall on a monitor at `scale` (1.0 at 96 DPI). `line` is the height of a line
-/// of text and `prompt` the width of the prompt, both as DirectWrite measured them.
-pub fn measure(config: &Config, em: f32, scale: f32, line: f32, prompt: f32) -> Layout {
+/// of text, `prompt` the width of the prompt and `switch` that of the wider switch icon, all as DirectWrite measured
+/// them.
+pub fn measure(
+    config: &Config,
+    em: f32,
+    scale: f32,
+    line: f32,
+    prompt: f32,
+    switch: f32,
+) -> Layout {
     let px = |length: Length| length.px(em, scale);
     let (input, list, element) = (&config.input, &config.list, &config.element);
     let border = px(config.window.border);
@@ -72,8 +91,13 @@ pub fn measure(config: &Config, em: f32, scale: f32, line: f32, prompt: f32) -> 
         right: text.left + prompt,
         ..text
     };
+    let switch = Rect {
+        left: text.right - switch,
+        ..text
+    };
     let entry = Rect {
         left: prompt.right + px(input.prompt_gap),
+        right: switch.left - px(input.prompt_gap),
         ..text
     };
 
@@ -121,6 +145,7 @@ pub fn measure(config: &Config, em: f32, scale: f32, line: f32, prompt: f32) -> 
         input: bar,
         prompt,
         entry,
+        switch,
         list: Rect {
             left: border,
             top,
@@ -156,6 +181,8 @@ mod tests {
         prompt_gap = "4px"
         placeholder = "Search"
         placeholder_color = "#ffffff"
+        apps_icon = "A"
+        files_icon = "F"
         [list]
         background = "#000000"
         padding = "6px"
@@ -171,11 +198,14 @@ mod tests {
         gap = "3px"
         [drun]
         cache = false
+        [files]
+        roots = []
+        cache = false
     "##;
 
     fn layout(scale: f32) -> Result<Layout, toml::de::Error> {
         let config: Config = toml::from_str(CONFIG)?;
-        Ok(measure(&config, 10.0, scale, 16.0, 8.0))
+        Ok(measure(&config, 10.0, scale, 16.0, 8.0, 16.0))
     }
 
     fn rect(left: f32, top: f32, right: f32, bottom: f32) -> Rect {
@@ -188,11 +218,22 @@ mod tests {
     }
 
     #[test]
-    fn the_input_bar_holds_the_prompt_then_the_entry() -> Result<(), toml::de::Error> {
+    fn the_input_bar_holds_the_prompt_the_entry_and_the_switch() -> Result<(), toml::de::Error> {
         let layout = layout(1.0)?;
         assert_eq!(layout.input, rect(12.0, 12.0, 188.0, 48.0));
         assert_eq!(layout.prompt, rect(22.0, 22.0, 30.0, 38.0));
-        assert_eq!(layout.entry, rect(34.0, 22.0, 178.0, 38.0));
+        assert_eq!(layout.entry, rect(34.0, 22.0, 158.0, 38.0));
+        assert_eq!(layout.switch, rect(162.0, 22.0, 178.0, 38.0));
+        Ok(())
+    }
+
+    #[test]
+    fn on_switch_takes_the_bar_right_of_the_icon() -> Result<(), toml::de::Error> {
+        let layout = layout(1.0)?;
+        assert!(layout.on_switch(162.0, 12.0));
+        assert!(layout.on_switch(187.0, 47.0));
+        assert!(!layout.on_switch(161.0, 30.0));
+        assert!(!layout.on_switch(170.0, 50.0));
         Ok(())
     }
 

@@ -5,6 +5,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [dependencies]
+ignore = "0.4.33"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"
 toml = { version = "1.1.6", default-features = false, features = ["display", "parse", "serde", "std"] }
@@ -23,6 +24,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Registry",
+    "Win32_Storage_FileSystem",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

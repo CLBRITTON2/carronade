@@ -15,7 +15,8 @@ border_color = "#ffffff33"
 radius = "0.5em"
 # image = 'C:\Users\you\Pictures\wallpaper.jpg'
 
-# The text box at the top. prompt is drawn left of the typed text in prompt_font.
+# The text box at the top. prompt is drawn left of the typed text in prompt_font. drun and files draw files_icon or
+# apps_icon at its right end, in prompt_font and placeholder_color: a click on it, or Tab, switches to the other list.
 [input]
 margin = "1em"
 padding = "0.75em"
@@ -27,6 +28,8 @@ prompt_font = "Segoe UI"
 prompt_gap = "0.5em"
 placeholder = "Search"
 placeholder_color = "#ffffff80"
+apps_icon = "Apps"
+files_icon = "Files"
 
 # The grid of matches below the text box, filled column by column.
 [list]
@@ -48,4 +51,10 @@ gap = "0.75em"
 # The Start menu mode. cache opens on the apps found last time, kept in %LOCALAPPDATA%\carronade\apps.toml, and
 # lists them again after the picker closes: the shell takes hundreds of ms to list them.
 [drun]
+cache = true
+
+# The file search mode. It lists every file and folder below roots, leaving out what git ignores and hidden ones.
+# cache works as drun's does, kept in %LOCALAPPDATA%\carronade\files.toml.
+[files]
+roots = ['C:\Users\you\dev']
 cache = true

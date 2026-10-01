@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("usage: carronade [--config <path>] <dmenu|drun>, got {0:?}")]
+    #[error("usage: carronade [--config <path>] <dmenu|drun|files>, got {0:?}")]
     Usage(Vec<String>),
     #[error("reading the config {path:?} failed: {source}")]
     ConfigRead {
@@ -50,26 +50,40 @@ pub enum Error {
     },
     #[error("the shell's icon of {target:?} is not a 32-bit bitmap")]
     IconBitmap { target: String },
-    #[error("reading the app cache {path:?} failed: {source}")]
-    CacheRead {
+    #[error("reading {path:?} failed: {source}")]
+    StoreRead {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("the app cache {path:?} is invalid, delete it to rebuild it: {source}")]
-    CacheParse {
+    #[error("{path:?} is invalid, delete it to start it over: {source}")]
+    StoreParse {
         path: PathBuf,
         #[source]
         source: Box<toml::de::Error>,
     },
-    #[error("writing the app cache {path:?} failed: {source}")]
-    CacheWrite {
+    #[error("writing {path:?} failed: {source}")]
+    StoreWrite {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("encoding the app cache failed: {0}")]
-    CacheSerialize(#[source] toml::ser::Error),
+    #[error("encoding {path:?} failed: {source}")]
+    StoreSerialize {
+        path: PathBuf,
+        #[source]
+        source: toml::ser::Error,
+    },
+    #[error("listing the files below {root:?} failed: {source}")]
+    Walk {
+        root: PathBuf,
+        #[source]
+        source: ignore::Error,
+    },
+    #[error("listing {root:?} found {path:?}, which is not below it")]
+    OutsideRoot { root: PathBuf, path: PathBuf },
+    #[error("the name of {path:?} is not valid Unicode")]
+    FileName { path: PathBuf },
     #[error("Windows refused to bring the picker to the foreground")]
     Foreground,
     #[error("the picker window got a message before its state was set")]

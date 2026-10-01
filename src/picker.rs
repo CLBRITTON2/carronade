@@ -21,9 +21,10 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_HIT_TEST_METRICS, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
-    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
-    IDWriteFactory, IDWriteFontCollection, IDWriteTextFormat, IDWriteTextLayout,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWriteCreateFactory, IDWriteFactory, IDWriteFontCollection, IDWriteTextFormat,
+    IDWriteTextLayout,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -51,14 +52,14 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VIRTUAL_KEY,
     VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_N, VK_P,
-    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_UP, VK_V,
+    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
-    GetMessageW, IDC_ARROW, LoadCursorW, MSG, PostQuitMessage, RegisterClassW, SW_SHOW,
+    GetMessageW, IDC_ARROW, LoadCursorW, MSG, PostMessageW, RegisterClassW, SW_SHOW,
     SetForegroundWindow, ShowWindow, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow, WA_INACTIVE,
-    WM_ACTIVATE, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    WM_ACTIVATE, WM_APP, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 use windows_numerics::Matrix3x2;
@@ -87,6 +88,24 @@ impl Row for String {
     }
 }
 
+/// What the person did in the picker.
+pub enum Action<T> {
+    Pick(Choice<T>),
+    /// Tab or a click on the switch icon.
+    Switch,
+}
+
+/// What `browse` does after an `Action`.
+pub enum Step<T> {
+    Done(Choice<T>),
+    /// Replaces the items and the switch icon in the same window, filtered by the query typed so far.
+    Show {
+        items: Vec<T>,
+        switch: String,
+    },
+    Stay,
+}
+
 enum Icon {
     Unloaded(String),
     Loaded(ID2D1Bitmap),
@@ -98,6 +117,8 @@ struct State {
     shown: Vec<usize>,
     cursor: usize,
     line: Line,
+    /// The glyph at the bar's right end, when there is a list to switch to.
+    switch: Option<String>,
     /// A typed high surrogate whose low half has not arrived yet.
     surrogate: Option<u16>,
     canvas: Canvas,
@@ -114,6 +135,8 @@ struct Canvas {
     wic: IWICImagingFactory,
     text: IDWriteTextFormat,
     prompt: IDWriteTextFormat,
+    /// The prompt font, centered for the switch icon.
+    icon: IDWriteTextFormat,
     image: Option<ID2D1BitmapBrush>,
     layout: Layout,
     config: Config,
@@ -124,21 +147,86 @@ struct Canvas {
 // Win32 and shell calls re-enter the window procedure, so every borrow ends before the next call that can.
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
-    static OUTCOME: RefCell<Option<Result<Choice<usize>, Error>>> = const { RefCell::new(None) };
+    static OUTCOME: RefCell<Option<Result<Action<usize>, Error>>> = const { RefCell::new(None) };
 }
 
 /// Shows `items` under an input bar until one is picked. Call it once per process: it registers the window class.
-pub fn pick<T: Row>(config: Config, items: Vec<T>) -> Result<Choice<T>, Error> {
-    let (labels, icons) = items
+pub fn pick<T: Row + Clone>(config: Config, items: Vec<T>) -> Result<Choice<T>, Error> {
+    browse(config, items, None, |action| {
+        Ok(match action {
+            Action::Pick(choice) => Step::Done(choice),
+            Action::Switch => Step::Stay,
+        })
+    })
+}
+
+/// Shows `items` under an input bar, with the `switch` glyph at its right end when there is one, asking `next` what
+/// each action leads to until it is done. Call it once per process: it registers the window class.
+pub fn browse<T: Row + Clone>(
+    config: Config,
+    items: Vec<T>,
+    switch: Option<String>,
+    next: impl FnMut(Action<T>) -> Result<Step<T>, Error>,
+) -> Result<Choice<T>, Error> {
+    let (labels, icons) = rows(&items);
+    let window = open(config, labels, icons, switch)?;
+    let choice = steps(items, next);
+    unsafe { DestroyWindow(window) }.map_err(win32("DestroyWindow"))?;
+    // Released now: a COM object released by the thread-local destructors at exit changes the exit code.
+    STATE.take();
+    choice
+}
+
+fn steps<T: Row + Clone>(
+    items: Vec<T>,
+    mut next: impl FnMut(Action<T>) -> Result<Step<T>, Error>,
+) -> Result<Choice<T>, Error> {
+    let mut items = items;
+    loop {
+        let action = match pump()? {
+            Action::Pick(Choice::Item(row)) => {
+                let len = items.len();
+                let item = items.get(row).cloned().ok_or(Error::Row { row, len })?;
+                Action::Pick(Choice::Item(item))
+            }
+            Action::Pick(Choice::Text(text)) => Action::Pick(Choice::Text(text)),
+            Action::Pick(Choice::Cancel) => Action::Pick(Choice::Cancel),
+            Action::Switch => Action::Switch,
+        };
+        match next(action)? {
+            Step::Done(choice) => return Ok(choice),
+            Step::Show {
+                items: shown,
+                switch,
+            } => {
+                let (labels, icons) = rows(&shown);
+                with(|state| state.show(labels, icons, switch))?;
+                items = shown;
+                render()?;
+            }
+            Step::Stay => {}
+        }
+    }
+}
+
+fn rows<T: Row>(items: &[T]) -> (Vec<String>, Vec<Option<Icon>>) {
+    items
         .iter()
         .map(|item| (item.label().to_owned(), item.icon().map(Icon::Unloaded)))
-        .unzip();
-    let window = open(config, labels, icons)?;
+        .unzip()
+}
+
+/// Dispatches messages until one leads to an action. It returns right after that message, so keys typed later reach
+/// what the action shows next.
+fn pump() -> Result<Action<usize>, Error> {
     let mut message = MSG::default();
     loop {
+        if let Some(outcome) = OUTCOME.take() {
+            return outcome;
+        }
         match unsafe { GetMessageW(&mut message, None, 0, 0) }.0 {
             -1 => return Err(last("GetMessageW")),
-            0 => break,
+            0 => return Err(Error::NoChoice),
             _ => {}
         }
         unsafe {
@@ -146,24 +234,14 @@ pub fn pick<T: Row>(config: Config, items: Vec<T>) -> Result<Choice<T>, Error> {
             DispatchMessageW(&message);
         }
     }
-    unsafe { DestroyWindow(window) }.map_err(win32("DestroyWindow"))?;
-    // Released now: a COM object released by the thread-local destructors at exit changes the exit code.
-    STATE.take();
-    match OUTCOME.take().ok_or(Error::NoChoice)?? {
-        Choice::Item(row) => {
-            let len = items.len();
-            items
-                .into_iter()
-                .nth(row)
-                .map(Choice::Item)
-                .ok_or(Error::Row { row, len })
-        }
-        Choice::Text(text) => Ok(Choice::Text(text)),
-        Choice::Cancel => Ok(Choice::Cancel),
-    }
 }
 
-fn open(config: Config, items: Vec<String>, icons: Vec<Option<Icon>>) -> Result<HWND, Error> {
+fn open(
+    config: Config,
+    items: Vec<String>,
+    icons: Vec<Option<Icon>>,
+    switch: Option<String>,
+) -> Result<HWND, Error> {
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
         .map_err(win32("SetProcessDpiAwarenessContext"))?;
     let monitor = unsafe { MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST) };
@@ -190,8 +268,13 @@ fn open(config: Config, items: Vec<String>, icons: Vec<Option<Icon>>) -> Result<
             .map_err(win32("CoCreateInstance(WICImagingFactory)"))?;
     let text = format(&dwrite, &config.font.family, em)?;
     let prompt = format(&dwrite, &config.input.prompt_font, em)?;
+    let icon = format(&dwrite, &config.input.prompt_font, em)?;
+    unsafe { icon.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) }
+        .map_err(win32("SetTextAlignment"))?;
     let typed = measure(&dwrite, &text, &config.input.placeholder)?;
     let prompted = measure(&dwrite, &prompt, &config.input.prompt)?;
+    let apps_icon = measure(&dwrite, &prompt, &config.input.apps_icon)?;
+    let files_icon = measure(&dwrite, &prompt, &config.input.files_icon)?;
     let line = typed.height.max(prompted.height);
     let layout = layout::measure(
         &config,
@@ -199,6 +282,7 @@ fn open(config: Config, items: Vec<String>, icons: Vec<Option<Icon>>) -> Result<
         scale,
         line,
         prompted.widthIncludingTrailingWhitespace,
+        apps_icon.width.max(files_icon.width),
     );
 
     let instance = unsafe { GetModuleHandleW(None) }.map_err(win32("GetModuleHandleW"))?;
@@ -298,6 +382,7 @@ fn open(config: Config, items: Vec<String>, icons: Vec<Option<Icon>>) -> Result<
         shown: (0..len).collect(),
         cursor: 0,
         line: Line::default(),
+        switch,
         surrogate: None,
         canvas: Canvas {
             window,
@@ -309,6 +394,7 @@ fn open(config: Config, items: Vec<String>, icons: Vec<Option<Icon>>) -> Result<
             wic,
             text,
             prompt,
+            icon,
             image,
             layout,
             config,
@@ -494,13 +580,13 @@ extern "system" fn window_proc(
             f32::from((lparam.0 >> 16) as i16),
         ),
         WM_ACTIVATE if (wparam.0 & 0xffff) as u32 == WA_INACTIVE => {
-            finish(Ok(Choice::Cancel));
-            Ok(())
+            finish(Ok(Action::Pick(Choice::Cancel)))
         }
         _ => return unsafe { DefWindowProcW(window, message, wparam, lparam) },
     };
     if let Err(error) = result {
-        finish(Err(error));
+        // Only the wake-up can fail here, and the error is recorded before it, so `pump` still returns it.
+        _ = finish(Err(error));
     }
     LRESULT(0)
 }
@@ -509,7 +595,7 @@ extern "system" fn window_proc(
 fn key(key: VIRTUAL_KEY) -> Result<bool, Error> {
     let ctrl = held(VK_CONTROL);
     match key {
-        VK_ESCAPE => finish(Ok(Choice::Cancel)),
+        VK_ESCAPE => finish(Ok(Action::Pick(Choice::Cancel)))?,
         VK_RETURN => {
             let shift = held(VK_SHIFT);
             let choice = with(|state| {
@@ -519,8 +605,9 @@ fn key(key: VIRTUAL_KEY) -> Result<bool, Error> {
                     false => menu::accept(&state.shown, state.cursor, &query),
                 }
             })?;
-            finish(Ok(choice));
+            finish(Ok(Action::Pick(choice)))?;
         }
+        VK_TAB if with(|state| state.switch.is_some())? => finish(Ok(Action::Switch))?,
         VK_DOWN => move_by(1)?,
         VK_UP => move_by(-1)?,
         VK_N if ctrl => move_by(1)?,
@@ -574,6 +661,9 @@ fn move_by(by: isize) -> Result<(), Error> {
 }
 
 fn clicked(x: f32, y: f32) -> Result<(), Error> {
+    if with(|state| state.switch.is_some() && state.canvas.layout.on_switch(x, y))? {
+        return finish(Ok(Action::Switch));
+    }
     let choice = with(|state| {
         let slot = state.canvas.layout.cell_at(x, y)?;
         let row = menu::first(state.cursor, state.page()) + slot;
@@ -582,10 +672,10 @@ fn clicked(x: f32, y: f32) -> Result<(), Error> {
             .get(row)
             .map(|_| menu::accept(&state.shown, row, ""))
     })?;
-    if let Some(choice) = choice {
-        finish(Ok(choice));
+    match choice {
+        Some(choice) => finish(Ok(Action::Pick(choice))),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// The clipboard's text, or nothing when it holds none.
@@ -616,13 +706,21 @@ fn clipboard_text(format: u32) -> Result<String, Error> {
     Ok(text?)
 }
 
-fn finish(outcome: Result<Choice<usize>, Error>) {
-    OUTCOME.with_borrow_mut(|slot| {
-        if slot.is_none() {
+/// Records the outcome for `pump`, keeping the first when two arrive before it looks.
+fn finish(outcome: Result<Action<usize>, Error>) -> Result<(), Error> {
+    let first = OUTCOME.with_borrow_mut(|slot| match slot {
+        Some(_) => false,
+        None => {
             *slot = Some(outcome);
-            unsafe { PostQuitMessage(0) };
+            true
         }
     });
+    if first {
+        // A thread message: `pump` stays in GetMessageW after a sent message such as WM_ACTIVATE until one arrives.
+        unsafe { PostMessageW(None, WM_APP, WPARAM(0), LPARAM(0)) }
+            .map_err(win32("PostMessageW"))?;
+    }
+    Ok(())
 }
 
 fn with<T>(f: impl FnOnce(&mut State) -> T) -> Result<T, Error> {
@@ -669,6 +767,14 @@ impl State {
                 _ => None,
             })
             .collect()
+    }
+
+    fn show(&mut self, items: Vec<String>, icons: Vec<Option<Icon>>, switch: String) {
+        self.shown = menu::filter(&items, &self.line.text());
+        self.items = items;
+        self.icons = icons;
+        self.cursor = 0;
+        self.switch = Some(switch);
     }
 
     fn set_icon(&mut self, index: usize, bitmap: ID2D1Bitmap) {
@@ -743,6 +849,9 @@ impl State {
             0.0,
             input.color,
         );
+        if let Some(switch) = &self.switch {
+            canvas.text(switch, &canvas.icon, layout.switch, input.placeholder_color);
+        }
 
         let element = &config.element;
         let first = menu::first(self.cursor, self.page());

@@ -55,7 +55,7 @@ fn an_invalid_cache_names_its_path() -> Result<(), Box<dyn Error>> {
     std::fs::write(&path, "[[app]]\nname = \"Only a name\"\n")?;
     let result = apps::load(&path);
     assert!(
-        matches!(&result, Err(CarronadeError::CacheParse { path: failed, .. }) if *failed == path),
+        matches!(&result, Err(CarronadeError::StoreParse { path: failed, .. }) if *failed == path),
         "got {result:?}"
     );
     Ok(())

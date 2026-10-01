@@ -5,10 +5,12 @@ and closes when it loses focus. It has no tray icon, no background process, and 
 window manager such as GlazeWM.
 
 ```powershell
-# launch a Start menu app, or run the typed text when nothing matches
+# launch a Start menu app, recently launched ones first, or run the typed text when nothing matches
 carronade drun
 # pick a line from stdin and print it
 'one', 'two', 'three' | carronade dmenu
+# search every file and folder below files.roots by words anywhere in the path, and open the pick
+carronade files
 # read the look from another file
 carronade --config C:\Users\Chris\dev\carronade\config.toml drun
 ```
@@ -19,6 +21,7 @@ Exit codes: 0 for a pick, 1 for a cancel, 2 for an error.
 | --- | --- |
 | Enter, click | pick the selected match, or the typed text when nothing matches |
 | Shift+Enter | pick the typed text |
+| Tab, click the icon at the bar's right end | switch between drun and files, keeping the typed text |
 | Up, Down, Ctrl+P, Ctrl+N | move the selection |
 | Left, Right, Home, End | move the caret |
 | Backspace, Delete, Ctrl+Backspace | delete a character or a word |

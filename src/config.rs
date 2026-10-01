@@ -19,6 +19,7 @@ pub struct Config {
     pub list: List,
     pub element: Element,
     pub drun: Drun,
+    pub files: Files,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +59,11 @@ pub struct Input {
     pub prompt_gap: Length,
     pub placeholder: String,
     pub placeholder_color: Color,
+    /// Drawn in `prompt_font` and `placeholder_color` at the bar's right end in file search: a click on it, or Tab,
+    /// switches to the apps.
+    pub apps_icon: String,
+    /// The same in drun, switching to file search.
+    pub files_icon: String,
 }
 
 /// The grid of matches, filled column by column.
@@ -89,6 +95,16 @@ pub struct Element {
 pub struct Drun {
     /// Opens on the apps found last time and lists them again after the picker closes: the shell takes hundreds of
     /// ms to list them.
+    pub cache: bool,
+}
+
+/// The file search mode.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Files {
+    /// The folders searched, with everything below them.
+    pub roots: Vec<PathBuf>,
+    /// Opens on the entries found last time and lists them again after the picker closes.
     pub cache: bool,
 }
 
