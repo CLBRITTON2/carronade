@@ -169,6 +169,8 @@ mod tests {
         selected = "#ffffff"
         icon = "20px"
         gap = "3px"
+        [drun]
+        cache = false
     "##;
 
     fn layout(scale: f32) -> Result<Layout, toml::de::Error> {

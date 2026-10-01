@@ -1,22 +1,29 @@
 //! The Start menu's apps, the list `Get-StartApps` prints, and launching them.
 
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::SIZE;
 use windows::Win32::Graphics::Gdi::HBITMAP;
 use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, IBindCtx,
 };
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, IShellItemImageFactory,
-    KF_FLAG_DEFAULT, SEE_MASK_FLAG_NO_UI, SHCreateItemFromParsingName, SHELLEXECUTEINFOW,
-    SHGetKnownFolderItem, SIGDN, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING, SIIGBF_ICONONLY,
-    ShellExecuteExW,
+    BHID_EnumItems, FOLDERID_AppsFolder, FOLDERID_LocalAppData, IEnumShellItems, IShellItem,
+    IShellItemImageFactory, KF_FLAG_DEFAULT, SEE_MASK_FLAG_NO_UI, SHCreateItemFromParsingName,
+    SHELLEXECUTEINFOW, SHGetKnownFolderItem, SIGDN, SIGDN_NORMALDISPLAY,
+    SIGDN_PARENTRELATIVEPARSING, SIIGBF_ICONONLY, ShellExecuteExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, PCWSTR};
 
+use crate::config::known_folder;
 use crate::error::{Error, win32};
 use crate::picker::Row;
 
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct App {
     pub name: String,
     /// The AppsFolder parsing name: an AUMID for packaged apps, a known-folder path for the rest.
@@ -60,6 +67,59 @@ pub fn list() -> Result<Vec<App>, Error> {
     }
     apps.sort_by_key(|app| app.name.to_lowercase());
     Ok(apps)
+}
+
+/// TOML needs a table at the top, so the apps sit in an `[[app]]` array.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Cache {
+    app: Vec<App>,
+}
+
+#[derive(Serialize)]
+struct CacheRef<'a> {
+    app: &'a [App],
+}
+
+/// `%LOCALAPPDATA%\carronade\apps.toml`, the apps drun found last time.
+pub fn cache_path() -> Result<PathBuf, Error> {
+    Ok(known_folder(&FOLDERID_LocalAppData)?
+        .join("carronade")
+        .join("apps.toml"))
+}
+
+/// The apps `save` wrote to `path`, or `None` before the first save.
+pub fn load(path: &Path) -> Result<Option<Vec<App>>, Error> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(Error::CacheRead {
+                path: path.to_owned(),
+                source,
+            });
+        }
+    };
+    let cache: Cache = toml::from_str(&text).map_err(|source| Error::CacheParse {
+        path: path.to_owned(),
+        source: Box::new(source),
+    })?;
+    Ok(Some(cache.app))
+}
+
+/// Writes `apps` for `load`, through a temporary file so a reader never sees half a list.
+pub fn save(path: &Path, apps: &[App]) -> Result<(), Error> {
+    let text = toml::to_string(&CacheRef { app: apps }).map_err(Error::CacheSerialize)?;
+    let temporary = path.with_extension("toml.tmp");
+    let write = |source| Error::CacheWrite {
+        path: path.to_owned(),
+        source,
+    };
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder).map_err(write)?;
+    }
+    std::fs::write(&temporary, text).map_err(write)?;
+    std::fs::rename(&temporary, path).map_err(write)
 }
 
 /// Opens `target` as the Run dialog would: an `App::target`, a program on PATH, a path or a URL.

@@ -321,10 +321,7 @@ fn an_unknown_config_field_is_an_error() -> Outcome {
 #[test]
 fn a_missing_font_is_an_error() -> Outcome {
     let stderr = config_error("missing_font", |text| {
-        text.replace(
-            "family = \"Segoe UI Variable Text\"",
-            "family = \"No Such Font\"",
-        )
+        text.replace("family = \"Segoe UI\"", "family = \"No Such Font\"")
     })?;
     assert_eq!(
         stderr,

@@ -1,6 +1,7 @@
 //! Reads the real Start menu through the shell.
 
 use std::error::Error;
+use std::path::{Path, PathBuf};
 
 use carronade::apps;
 use carronade::error::Error as CarronadeError;
@@ -23,6 +24,40 @@ fn list_includes_packaged_apps() -> Result<(), Box<dyn Error>> {
     // Packaged apps have an AUMID, family name then `!` then app id. Settings ships with every Windows 11 install.
     let apps = apps::list()?;
     assert!(apps.iter().any(|app| app.id.starts_with("windows.immersivecontrolpanel_") && app.id.contains('!')));
+    Ok(())
+}
+
+fn cache(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(name)
+        .join("apps.toml")
+}
+
+#[test]
+fn a_saved_list_loads_back_unchanged() -> Result<(), Box<dyn Error>> {
+    let path = cache("round-trip");
+    let apps = apps::list()?;
+    apps::save(&path, &apps)?;
+    assert_eq!(apps::load(&path)?, Some(apps));
+    Ok(())
+}
+
+#[test]
+fn a_missing_cache_loads_as_none() -> Result<(), Box<dyn Error>> {
+    assert_eq!(apps::load(&cache("missing"))?, None);
+    Ok(())
+}
+
+#[test]
+fn an_invalid_cache_names_its_path() -> Result<(), Box<dyn Error>> {
+    let path = cache("invalid");
+    std::fs::create_dir_all(path.parent().ok_or("no parent")?)?;
+    std::fs::write(&path, "[[app]]\nname = \"Only a name\"\n")?;
+    let result = apps::load(&path);
+    assert!(
+        matches!(&result, Err(CarronadeError::CacheParse { path: failed, .. }) if *failed == path),
+        "got {result:?}"
+    );
     Ok(())
 }
 

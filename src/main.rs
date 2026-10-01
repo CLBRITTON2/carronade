@@ -66,7 +66,24 @@ fn dmenu(config: Config) -> Result<bool, Error> {
 }
 
 fn drun(config: Config) -> Result<bool, Error> {
-    match pick(config, apps::list()?)? {
+    if !config.drun.cache {
+        return launch(pick(config, apps::list()?)?);
+    }
+    let path = apps::cache_path()?;
+    let Some(cached) = apps::load(&path)? else {
+        let found = apps::list()?;
+        apps::save(&path, &found)?;
+        return launch(pick(config, found)?);
+    };
+    let launched = launch(pick(config, cached)?)?;
+    // After the picker closes, since listing beside it slowed its startup by tens of ms.
+    apps::save(&path, &apps::list()?)?;
+    Ok(launched)
+}
+
+/// Launches what `choice` names, returning whether there was one.
+fn launch(choice: Choice<apps::App>) -> Result<bool, Error> {
+    match choice {
         Choice::Item(app) => apps::launch(&app.target())?,
         Choice::Text(command) => apps::launch(&command)?,
         Choice::Cancel => return Ok(false),

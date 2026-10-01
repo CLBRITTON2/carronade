@@ -1,4 +1,4 @@
-//! The look of the picker, read from a TOML file. Every field is required except `window.image`.
+//! The look of the picker and the modes' options, read from a TOML file. Every field is required except `window.image`.
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::{FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+use windows::core::GUID;
 
 use crate::error::{Error, win32};
 
@@ -17,6 +18,7 @@ pub struct Config {
     pub input: Input,
     pub list: List,
     pub element: Element,
+    pub drun: Drun,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +81,15 @@ pub struct Element {
     pub selected: Color,
     pub icon: Length,
     pub gap: Length,
+}
+
+/// The Start menu mode.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Drun {
+    /// Opens on the apps found last time and lists them again after the picker closes: the shell takes hundreds of
+    /// ms to list them.
+    pub cache: bool,
 }
 
 /// `"8px"`, scaled with the monitor's DPI, or `"1.5em"`, a multiple of the font size.
@@ -163,17 +174,23 @@ pub fn load(path: &Path) -> Result<Config, Error> {
     })?;
     toml::from_str(&text).map_err(|source| Error::ConfigParse {
         path: path.to_owned(),
-        source,
+        source: Box::new(source),
     })
 }
 
 /// `%APPDATA%\carronade\config.toml`, the config read when no `--config` is given.
 pub fn path() -> Result<PathBuf, Error> {
-    let folder = unsafe { SHGetKnownFolderPath(&FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, None) }
+    Ok(known_folder(&FOLDERID_RoamingAppData)?
+        .join("carronade")
+        .join("config.toml"))
+}
+
+pub(crate) fn known_folder(id: &GUID) -> Result<PathBuf, Error> {
+    let folder = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }
         .map_err(win32("SHGetKnownFolderPath"))?;
     let text = unsafe { folder.to_string() };
     unsafe { CoTaskMemFree(Some(folder.0 as _)) };
-    Ok(PathBuf::from(text?).join("carronade").join("config.toml"))
+    Ok(PathBuf::from(text?))
 }
 
 #[cfg(test)]

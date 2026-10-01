@@ -14,7 +14,7 @@ pub enum Error {
     ConfigParse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
     #[error("the font family {0:?} is not installed")]
     Font(String),
@@ -48,6 +48,26 @@ pub enum Error {
         #[source]
         source: windows::core::Error,
     },
+    #[error("reading the app cache {path:?} failed: {source}")]
+    CacheRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the app cache {path:?} is invalid, delete it to rebuild it: {source}")]
+    CacheParse {
+        path: PathBuf,
+        #[source]
+        source: Box<toml::de::Error>,
+    },
+    #[error("writing the app cache {path:?} failed: {source}")]
+    CacheWrite {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("encoding the app cache failed: {0}")]
+    CacheSerialize(#[source] toml::ser::Error),
     #[error("Windows refused to bring the picker to the foreground")]
     Foreground,
     #[error("the picker window got a message before its state was set")]

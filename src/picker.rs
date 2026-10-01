@@ -14,7 +14,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
     D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE,
     D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Bitmap,
     ID2D1BitmapBrush, ID2D1DCRenderTarget, ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
@@ -33,8 +33,9 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
-    WICBitmapDitherTypeNone, WICBitmapInterpolationModeHighQualityCubic,
-    WICBitmapPaletteTypeMedianCut, WICBitmapUsePremultipliedAlpha, WICDecodeMetadataCacheOnDemand,
+    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
+    WICBitmapInterpolationModeHighQualityCubic, WICBitmapPaletteTypeMedianCut,
+    WICBitmapUsePremultipliedAlpha, WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::{
@@ -261,7 +262,7 @@ fn open(config: Config, items: Vec<String>, icons: Vec<Option<Icon>>) -> Result<
         return Err(last("SelectObject"));
     }
     let properties = D2D1_RENDER_TARGET_PROPERTIES {
-        r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
         pixelFormat: D2D1_PIXEL_FORMAT {
             format: DXGI_FORMAT_B8G8R8A8_UNORM,
             alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
@@ -315,7 +316,8 @@ fn open(config: Config, items: Vec<String>, icons: Vec<Option<Icon>>) -> Result<
             scale,
         },
     }));
-    render()?;
+    // The first frame goes up without icons, which take tens of ms each to load.
+    with(State::draw)??;
     unsafe {
         _ = ShowWindow(window, SW_SHOW);
         // The foreground lock admits only the process that got the last input, so inject a zero-length mouse move.
@@ -335,6 +337,7 @@ fn open(config: Config, items: Vec<String>, icons: Vec<Option<Icon>>) -> Result<
             return Err(Error::Foreground);
         }
     }
+    render()?;
     Ok(window)
 }
 
@@ -430,10 +433,25 @@ fn image(
             )
             .map_err(failed)?;
         let frame = decoder.GetFrame(0).map_err(failed)?;
+        let (mut source_width, mut source_height) = (0, 0);
+        frame
+            .GetSize(&mut source_width, &mut source_height)
+            .map_err(failed)?;
+        // Decoded straight to the size it covers the window at: a photo at full size is tens of MB and slow to decode.
+        let zoom = (width / source_width as f32).max(height / source_height as f32);
+        let scaler = wic.CreateBitmapScaler().map_err(failed)?;
+        scaler
+            .Initialize(
+                &frame,
+                (source_width as f32 * zoom).ceil() as u32,
+                (source_height as f32 * zoom).ceil() as u32,
+                WICBitmapInterpolationModeFant,
+            )
+            .map_err(failed)?;
         let converter = wic.CreateFormatConverter().map_err(failed)?;
         converter
             .Initialize(
-                &frame,
+                &scaler,
                 &GUID_WICPixelFormat32bppPBGRA,
                 WICBitmapDitherTypeNone,
                 None,
@@ -448,15 +466,11 @@ fn image(
             .CreateBitmapBrush(&bitmap, None, None)
             .map_err(failed)?;
         let size = bitmap.GetSize();
-        let zoom = (width / size.width).max(height / size.height);
-        brush.SetTransform(&Matrix3x2 {
-            M11: zoom,
-            M12: 0.0,
-            M21: 0.0,
-            M22: zoom,
-            M31: (width - size.width * zoom) / 2.0,
-            M32: (height - size.height * zoom) / 2.0,
-        });
+        // Centered on whole pixels, so the bitmap is copied rather than resampled.
+        brush.SetTransform(&Matrix3x2::translation(
+            ((width - size.width) / 2.0).round(),
+            ((height - size.height) / 2.0).round(),
+        ));
         brush
     };
     Ok(brush)

@@ -3,40 +3,49 @@
 # Colors are "#rrggbb" or "#rrggbbaa".
 
 [font]
-family = "Segoe UI Variable Text"
+family = "Segoe UI"
 size = 11
 
+# The popup. image, the only optional field, is cover-scaled behind everything else.
 [window]
-width = "45em"
-background = "#141418e0"
-border = "3px"
-border_color = "#ffffff59"
-radius = "1em"
+width = "40em"
+background = "#202020"
+border = "1px"
+border_color = "#ffffff33"
+radius = "0.5em"
 # image = 'C:\Users\you\Pictures\wallpaper.jpg'
 
+# The text box at the top. prompt is drawn left of the typed text in prompt_font.
 [input]
-margin = "3em"
-padding = "1em"
-radius = "2em"
-background = "#1c1c22eb"
+margin = "1em"
+padding = "0.75em"
+radius = "0.5em"
+background = "#2c2c2c"
 color = "#ffffff"
-prompt = "\uf061"
-prompt_font = "JetBrainsMono NFP"
-prompt_gap = "1em"
+prompt = ">"
+prompt_font = "Segoe UI"
+prompt_gap = "0.5em"
 placeholder = "Search"
-placeholder_color = "#ffffffb3"
+placeholder_color = "#ffffff80"
 
+# The grid of matches below the text box, filled column by column.
 [list]
-background = "#141418e0"
-padding = "1.5em"
-spacing = "0.5em"
-columns = 2
-lines = 3
+background = "#00000000"
+padding = "1em"
+spacing = "0.25em"
+columns = 1
+lines = 8
 
+# One match: its icon, then its label.
 [element]
 padding = "0.5em"
-radius = "1.5em"
+radius = "0.5em"
 color = "#ffffff"
-selected = "#ffffff2e"
-icon = "3em"
-gap = "0.5em"
+selected = "#ffffff1a"
+icon = "2em"
+gap = "0.75em"
+
+# The Start menu mode. cache opens on the apps found last time, kept in %LOCALAPPDATA%\carronade\apps.toml, and
+# lists them again after the picker closes: the shell takes hundreds of ms to list them.
+[drun]
+cache = true
