@@ -56,6 +56,10 @@ impl Row for Command {
             Command::ShutDown => '\u{e7e8}',
         }))
     }
+
+    fn boost(&self) -> i32 {
+        0
+    }
 }
 
 pub fn run(command: Command) -> Result<(), Error> {

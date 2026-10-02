@@ -12,16 +12,23 @@ pub enum Choice<T> {
 }
 
 /// Indices of the items matching every whitespace-separated term of `query` (see `term`), ignoring case, best matches
-/// first. Equal matches keep their input order, which callers use for recency or depth.
-pub fn filter(items: &[String], query: &str) -> Vec<usize> {
+/// first. Each item's boost adds to its score, so with no query the boosts alone rank. Equal matches keep their input
+/// order, which callers use for depth.
+pub fn filter(items: &[String], boosts: &[i32], query: &str) -> Vec<usize> {
     let terms = terms(query);
     let mut ranked: Vec<(Reverse<i32>, usize)> = items
         .iter()
+        .zip(boosts)
         .enumerate()
-        .filter_map(|(index, item)| {
+        .filter_map(|(index, (item, boost))| {
             let letters = letters(item);
             let fits: Option<Vec<Fit>> = terms.iter().map(|term| fit(&letters, term)).collect();
-            fits.map(|fits| (Reverse(fits.iter().map(|fit| fit.score).sum()), index))
+            fits.map(|fits| {
+                (
+                    Reverse(boost + fits.iter().map(|fit| fit.score).sum::<i32>()),
+                    index,
+                )
+            })
         })
         .collect();
     ranked.sort_by_key(|&(rank, _)| rank);
@@ -454,15 +461,27 @@ mod tests {
         lines.iter().map(|line| (*line).to_owned()).collect()
     }
 
+    fn unboosted(items: &[String], query: &str) -> Vec<usize> {
+        filter(items, &vec![0; items.len()], query)
+    }
+
     #[test]
     fn empty_query_keeps_every_item() {
-        assert_eq!(filter(&items(&["a", "b"]), "  "), [0, 1]);
+        assert_eq!(unboosted(&items(&["a", "b"]), "  "), [0, 1]);
+    }
+
+    #[test]
+    fn a_boost_ranks_the_empty_query_and_lifts_a_slightly_worse_match() {
+        let apps = items(&["Notepad", "Paint", "Snipping Tool"]);
+        assert_eq!(filter(&apps, &[0, 16, 4], ""), [1, 2, 0]);
+        assert_eq!(unboosted(&apps, "pa"), [1, 0]);
+        assert_eq!(filter(&apps, &[16, 0, 0], "pa"), [0, 1]);
     }
 
     #[test]
     fn filter_ignores_case() {
         assert_eq!(
-            filter(&items(&["Visual Studio Code", "Notepad"]), "code"),
+            unboosted(&items(&["Visual Studio Code", "Notepad"]), "code"),
             [0]
         );
     }
@@ -470,19 +489,19 @@ mod tests {
     #[test]
     fn filter_needs_every_word_in_any_order() {
         let apps = items(&["Windows Terminal", "Terminal Preview", "Windows Security"]);
-        assert_eq!(filter(&apps, "term win"), [0]);
+        assert_eq!(unboosted(&apps, "term win"), [0]);
     }
 
     #[test]
     fn equal_matches_keep_input_order() {
-        assert_eq!(filter(&items(&["zeta", "alpha", "beta"]), "eta"), [0, 2]);
+        assert_eq!(unboosted(&items(&["zeta", "alpha", "beta"]), "eta"), [0, 2]);
     }
 
     #[test]
     fn a_word_start_beats_a_match_mid_word() {
         let apps = items(&["Notepad", "Paint", "Snipping Tool"]);
-        assert_eq!(filter(&apps, "pa"), [1, 0]);
-        assert_eq!(filter(&apps, "t"), [2, 0, 1]);
+        assert_eq!(unboosted(&apps, "pa"), [1, 0]);
+        assert_eq!(unboosted(&apps, "t"), [2, 0, 1]);
     }
 
     #[test]
@@ -493,33 +512,33 @@ mod tests {
             "zet\\tests\\integration\\run.ps1",
             "zet\\prune.go",
         ]);
-        assert_eq!(filter(&entries, "run"), [2, 0, 3]);
-        assert_eq!(filter(&entries, "integ run"), [2]);
+        assert_eq!(unboosted(&entries, "run"), [2, 0, 3]);
+        assert_eq!(unboosted(&entries, "integ run"), [2]);
     }
 
     #[test]
     fn letters_match_in_order_with_gaps() {
         let apps = items(&["carronade", "nordic"]);
-        assert_eq!(filter(&apps, "crnd"), [0]);
-        assert_eq!(filter(&apps, "dnrc"), Vec::<usize>::new());
+        assert_eq!(unboosted(&apps, "crnd"), [0]);
+        assert_eq!(unboosted(&apps, "dnrc"), Vec::<usize>::new());
     }
 
     #[test]
     fn a_tight_match_beats_scattered_letters() {
         let apps = items(&["Network Tools Extra", "Notepad"]);
-        assert_eq!(filter(&apps, "note"), [1, 0]);
+        assert_eq!(unboosted(&apps, "note"), [1, 0]);
     }
 
     #[test]
     fn a_capital_after_a_lowercase_starts_a_word() {
         let apps = items(&["Snowman", "SnowMan"]);
-        assert_eq!(filter(&apps, "m"), [1, 0]);
+        assert_eq!(unboosted(&apps, "m"), [1, 0]);
     }
 
     #[test]
     fn every_word_adds_to_the_rank() {
         let entries = items(&["src\\domain.rs", "src\\main.rs"]);
-        assert_eq!(filter(&entries, "src main"), [1, 0]);
+        assert_eq!(unboosted(&entries, "src main"), [1, 0]);
     }
 
     #[test]
@@ -533,29 +552,29 @@ mod tests {
     #[test]
     fn a_quote_matches_the_letters_in_a_row() {
         let apps = items(&["carronade", "rotation"]);
-        assert_eq!(filter(&apps, "ron"), [1, 0]);
-        assert_eq!(filter(&apps, "'ron"), [0]);
+        assert_eq!(unboosted(&apps, "ron"), [1, 0]);
+        assert_eq!(unboosted(&apps, "'ron"), [0]);
     }
 
     #[test]
     fn a_caret_and_a_dollar_anchor_to_the_ends() {
         let entries = items(&["main.rs", "domain.rs", "main.rsx", "main"]);
-        assert_eq!(filter(&entries, "^ma"), [0, 2, 3]);
-        assert_eq!(filter(&entries, ".rs$"), [0, 1]);
-        assert_eq!(filter(&entries, "^main$"), [3]);
+        assert_eq!(unboosted(&entries, "^ma"), [0, 2, 3]);
+        assert_eq!(unboosted(&entries, ".rs$"), [0, 1]);
+        assert_eq!(unboosted(&entries, "^main$"), [3]);
     }
 
     #[test]
     fn a_bang_drops_the_items_holding_the_word() {
         let entries = items(&["main.rs", "main.go", "go.mod"]);
-        assert_eq!(filter(&entries, "main !.go"), [0]);
-        assert_eq!(filter(&entries, "!^go"), [0, 1]);
+        assert_eq!(unboosted(&entries, "main !.go"), [0]);
+        assert_eq!(unboosted(&entries, "!^go"), [0, 1]);
     }
 
     #[test]
     fn operators_alone_match_everything() {
         let entries = items(&["main.rs", "main.go"]);
-        assert_eq!(filter(&entries, "! ^ ' $"), [0, 1]);
+        assert_eq!(unboosted(&entries, "! ^ ' $"), [0, 1]);
     }
 
     #[test]

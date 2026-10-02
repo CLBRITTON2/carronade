@@ -2,6 +2,7 @@
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -15,6 +16,12 @@ pub fn path(name: &str) -> Result<PathBuf, Error> {
     Ok(known_folder(&FOLDERID_LocalAppData)?
         .join("carronade")
         .join(name))
+}
+
+/// Seconds since the Unix epoch, the time stamps the stored files hold.
+pub fn now() -> Result<u64, Error> {
+    let since = SystemTime::now().duration_since(UNIX_EPOCH);
+    Ok(since.map_err(Error::Clock)?.as_secs())
 }
 
 /// What `save` wrote to `path`, or `None` before the first save.

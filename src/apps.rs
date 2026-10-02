@@ -43,6 +43,10 @@ impl Row for App {
     fn icon(&self) -> Option<Picture> {
         Some(Picture::Shell(self.target()))
     }
+
+    fn boost(&self) -> i32 {
+        0
+    }
 }
 
 /// Every app in the Start menu's All apps list, packaged ones included, sorted by name.

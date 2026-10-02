@@ -4,6 +4,12 @@ Each release has a `## [<version>] - <date>` section, newest first. `scripts/rel
 the tagged version as its GitHub release notes, and refuses to release a version without one. Changes since the last
 release go under `## [Unreleased]`, renamed to the version when it is tagged.
 
+## [Unreleased]
+
+- Apps and entries rank by how often and how lately they were opened as well as by how well they match. Before
+  anything is typed, that ranking alone orders them, where it used to list the most recent first. The histories of
+  0.3.0 and earlier load as one use each and are saved in the new format on the next launch.
+
 ## [0.3.0] - 2026-10-02
 
 - Icons come from `%LOCALAPPDATA%\carronade\icons.bin` after their first load, which takes well under a millisecond

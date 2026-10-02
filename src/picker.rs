@@ -4,7 +4,6 @@
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{
     GENERIC_READ, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
@@ -70,6 +69,7 @@ use crate::error::{Error, last, win32};
 use crate::icons::{self, Cached, Pixels};
 use crate::layout::{self, Layout, Rect};
 use crate::menu::{self, Choice, Line};
+use crate::store;
 
 const CLASS: PCWSTR = w!("carronade");
 
@@ -77,6 +77,8 @@ const CLASS: PCWSTR = w!("carronade");
 pub trait Row {
     fn label(&self) -> &str;
     fn icon(&self) -> Option<Picture>;
+    /// Added to the score of the row's matches, and ranks the rows before anything is typed.
+    fn boost(&self) -> i32;
 }
 
 impl Row for String {
@@ -86,6 +88,10 @@ impl Row for String {
 
     fn icon(&self) -> Option<Picture> {
         None
+    }
+
+    fn boost(&self) -> i32 {
+        0
     }
 }
 
@@ -131,6 +137,7 @@ enum Icon {
 struct State {
     items: Vec<String>,
     icons: Vec<Option<Icon>>,
+    boosts: Vec<i32>,
     shown: Vec<usize>,
     cursor: usize,
     line: Line,
@@ -197,8 +204,7 @@ pub fn browse<T: Row + Clone, R>(
     switch: Option<String>,
     next: impl FnMut(Action<T>) -> Result<Step<T, R>, Error>,
 ) -> Result<R, Error> {
-    let (labels, icons) = rows(&items);
-    let window = open(config, labels, icons, switch)?;
+    let window = open(config, rows(&items), switch)?;
     let choice = steps(items, next);
     unsafe { DestroyWindow(window) }.map_err(win32("DestroyWindow"))?;
     // Released now: a COM object released by the thread-local destructors at exit changes the exit code.
@@ -235,8 +241,8 @@ fn steps<T: Row + Clone, R>(
                 items: shown,
                 switch,
             } => {
-                let (labels, icons) = rows(&shown);
-                with(|state| state.show(labels, icons, switch))?;
+                let rows = rows(&shown);
+                with(|state| state.show(rows, switch))?;
                 items = shown;
                 render()?;
             }
@@ -245,17 +251,27 @@ fn steps<T: Row + Clone, R>(
     }
 }
 
-fn rows<T: Row>(items: &[T]) -> (Vec<String>, Vec<Option<Icon>>) {
-    items
-        .iter()
-        .map(|item| {
-            let icon = item.icon().map(|picture| match picture {
-                Picture::Shell(target) => Icon::Unloaded(target),
-                Picture::Glyph(glyph) => Icon::Glyph(glyph),
-            });
-            (item.label().to_owned(), icon)
-        })
-        .unzip()
+/// What the picker keeps of each item, by index.
+struct Rows {
+    labels: Vec<String>,
+    icons: Vec<Option<Icon>>,
+    boosts: Vec<i32>,
+}
+
+fn rows<T: Row>(items: &[T]) -> Rows {
+    Rows {
+        labels: items.iter().map(|item| item.label().to_owned()).collect(),
+        icons: items
+            .iter()
+            .map(|item| {
+                item.icon().map(|picture| match picture {
+                    Picture::Shell(target) => Icon::Unloaded(target),
+                    Picture::Glyph(glyph) => Icon::Glyph(glyph),
+                })
+            })
+            .collect(),
+        boosts: items.iter().map(Row::boost).collect(),
+    }
 }
 
 /// Dispatches messages until one leads to an action. It returns right after that message, so keys typed later reach
@@ -278,12 +294,7 @@ fn pump() -> Result<Action<usize>, Error> {
     }
 }
 
-fn open(
-    config: Config,
-    items: Vec<String>,
-    icons: Vec<Option<Icon>>,
-    switch: Option<String>,
-) -> Result<HWND, Error> {
+fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Error> {
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
         .map_err(win32("SetProcessDpiAwarenessContext"))?;
     let monitor = unsafe { MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST) };
@@ -424,11 +435,11 @@ fn open(
         None => None,
     };
 
-    let len = items.len();
     STATE.set(Some(State {
-        items,
-        icons,
-        shown: (0..len).collect(),
+        shown: menu::filter(&rows.labels, &rows.boosts, ""),
+        items: rows.labels,
+        icons: rows.icons,
+        boosts: rows.boosts,
         cursor: 0,
         line: Line::default(),
         switch,
@@ -719,7 +730,7 @@ fn edit(change: impl FnOnce(&Line) -> Line) -> Result<(), Error> {
     with(|state| {
         let line = change(&state.line);
         if line.text() != state.line.text() {
-            state.shown = menu::filter(&state.items, &line.text());
+            state.shown = menu::filter(&state.items, &state.boosts, &line.text());
             state.cursor = 0;
         }
         state.line = line;
@@ -866,7 +877,7 @@ fn render() -> Result<(), Error> {
         let cache = icons::load(&icons::path()?)?;
         with(|state| state.cache = Some(cache))?;
     }
-    let now = now()?;
+    let now = store::now()?;
     for (index, target) in pending {
         let pixels = match with(|state| state.cached(&target, side, now))? {
             Some(pixels) => pixels,
@@ -890,12 +901,6 @@ fn render() -> Result<(), Error> {
         })??;
     }
     with(State::draw)?
-}
-
-/// Seconds since the Unix epoch.
-fn now() -> Result<u64, Error> {
-    let since = SystemTime::now().duration_since(UNIX_EPOCH);
-    Ok(since.map_err(Error::Clock)?.as_secs())
 }
 
 impl State {
@@ -928,10 +933,11 @@ impl State {
             .collect()
     }
 
-    fn show(&mut self, items: Vec<String>, icons: Vec<Option<Icon>>, switch: String) {
-        self.shown = menu::filter(&items, &self.line.text());
-        self.items = items;
-        self.icons = icons;
+    fn show(&mut self, rows: Rows, switch: String) {
+        self.shown = menu::filter(&rows.labels, &rows.boosts, &self.line.text());
+        self.items = rows.labels;
+        self.icons = rows.icons;
+        self.boosts = rows.boosts;
         self.cursor = 0;
         self.switch = Some(switch);
     }

@@ -3,6 +3,7 @@
 //! the same window. Each exits 1 on cancel and 2 on error. `--config <path>` replaces
 //! `%APPDATA%\carronade\config.toml`.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -11,9 +12,10 @@ use carronade::apps::{self, App};
 use carronade::config::{self, Config};
 use carronade::error::Error;
 use carronade::files;
-use carronade::history;
+use carronade::history::{self, Use};
 use carronade::menu::Choice;
 use carronade::picker::{Action, Picture, Row, Step, browse, pick};
+use carronade::store;
 use carronade::system::{self, Command};
 use windows::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MessageBoxW};
@@ -86,27 +88,35 @@ impl Kind {
     }
 }
 
+/// An app or entry with the boost its history gives it.
 #[derive(Clone)]
 enum Item {
-    App(App),
+    App(App, i32),
     Command(Command),
-    Entry(files::Entry),
+    Entry(files::Entry, i32),
 }
 
 impl Row for Item {
     fn label(&self) -> &str {
         match self {
-            Item::App(app) => app.label(),
+            Item::App(app, _) => app.label(),
             Item::Command(command) => command.label(),
-            Item::Entry(entry) => entry.label(),
+            Item::Entry(entry, _) => entry.label(),
         }
     }
 
     fn icon(&self) -> Option<Picture> {
         match self {
-            Item::App(app) => app.icon(),
+            Item::App(app, _) => app.icon(),
             Item::Command(command) => command.icon(),
-            Item::Entry(entry) => entry.icon(),
+            Item::Entry(entry, _) => entry.icon(),
+        }
+    }
+
+    fn boost(&self) -> i32 {
+        match self {
+            Item::App(_, boost) | Item::Entry(_, boost) => *boost,
+            Item::Command(command) => command.boost(),
         }
     }
 }
@@ -119,8 +129,11 @@ struct Settings {
     terminal: String,
     apps_icon: String,
     files_icon: String,
-    recent_apps: Vec<String>,
-    recent_files: Vec<String>,
+    now: u64,
+    recent_apps: Vec<Use>,
+    recent_files: Vec<Use>,
+    app_boosts: HashMap<String, i32>,
+    file_boosts: HashMap<String, i32>,
 }
 
 impl Settings {
@@ -144,41 +157,45 @@ impl Found {
         Ok(match kind {
             Kind::Apps => {
                 if self.apps.is_none() {
-                    let found = cached(
+                    self.apps = Some(cached(
                         settings.apps_cache,
                         apps::cache_path,
                         apps::load,
                         apps::list,
-                    )?;
-                    self.apps = Some(history::by_recent(found, &settings.recent_apps, app_id));
+                    )?);
                 }
-                let apps = self.apps.iter().flatten().cloned().map(Item::App);
+                let apps = self
+                    .apps
+                    .iter()
+                    .flatten()
+                    .map(|app| Item::App(app.clone(), boost(&settings.app_boosts, &app.id)));
                 apps.chain(Command::ALL.map(Item::Command)).collect()
             }
             Kind::Files => {
                 if self.files.is_none() {
                     let list = || files::list(&settings.roots);
-                    let found = cached(settings.files_cache, files::cache_path, files::load, list)?;
-                    let recent = &settings.recent_files;
-                    self.files = Some(history::by_recent(found, recent, entry_path));
+                    self.files = Some(cached(
+                        settings.files_cache,
+                        files::cache_path,
+                        files::load,
+                        list,
+                    )?);
                 }
                 self.files
                     .iter()
                     .flatten()
-                    .cloned()
-                    .map(Item::Entry)
+                    .map(|entry| {
+                        Item::Entry(entry.clone(), boost(&settings.file_boosts, &entry.path))
+                    })
                     .collect()
             }
         })
     }
 }
 
-fn app_id(app: &App) -> &str {
-    &app.id
-}
-
-fn entry_path(entry: &files::Entry) -> &str {
-    &entry.path
+/// The boost of `key` in `boosts`, none for a key never used.
+fn boost(boosts: &HashMap<String, i32>, key: &str) -> i32 {
+    boosts.get(key).copied().unwrap_or(0)
 }
 
 /// What `list` found last time when `cache` is on and there was a last time, else what it finds now.
@@ -205,11 +222,14 @@ enum Picked {
 }
 
 /// Opens the pick from apps and files, starting on `start`: launches an app, elevated or not, runs a system command,
-/// opens a file or folder, recording opened apps and entries as recent, starts the terminal in an entry's folder, or runs the typed text as
-/// the Run dialog would. Returns whether there was a pick, which a declined UAC prompt is not.
+/// opens a file or folder, recording each app and entry opened in its history, starts the terminal in an entry's
+/// folder, or runs the typed text as the Run dialog would. Returns whether there was a pick, which a declined UAC prompt is not.
 fn search(config: Config, start: Kind) -> Result<bool, Error> {
     let apps_history = history::apps_path()?;
     let files_history = history::files_path()?;
+    let now = store::now()?;
+    let recent_apps = history::load(&apps_history, now)?;
+    let recent_files = history::load(&files_history, now)?;
     let settings = Settings {
         apps_cache: config.apps.cache,
         files_cache: config.files.cache,
@@ -217,8 +237,11 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         terminal: config.files.terminal.clone(),
         apps_icon: config.input.apps_icon.clone(),
         files_icon: config.input.files_icon.clone(),
-        recent_apps: history::load(&apps_history)?,
-        recent_files: history::load(&files_history)?,
+        now,
+        app_boosts: history::boosts(&recent_apps, now),
+        file_boosts: history::boosts(&recent_files, now),
+        recent_apps,
+        recent_files,
     };
     let mut found = Found {
         apps: None,
@@ -236,18 +259,18 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
                     switch: settings.switch(kind),
                 }
             }
-            Action::Terminal(Item::Entry(entry)) => Step::Done(Picked::Terminal(entry)),
-            Action::Terminal(Item::App(_) | Item::Command(_)) => Step::Stay,
-            Action::Admin(Item::App(app)) => Step::Done(Picked::Admin(app)),
-            Action::Admin(Item::Command(_) | Item::Entry(_)) => Step::Stay,
+            Action::Terminal(Item::Entry(entry, _)) => Step::Done(Picked::Terminal(entry)),
+            Action::Terminal(Item::App(..) | Item::Command(_)) => Step::Stay,
+            Action::Admin(Item::App(app, _)) => Step::Done(Picked::Admin(app)),
+            Action::Admin(Item::Command(_) | Item::Entry(..)) => Step::Stay,
         })
     })?;
     let picked = match choice {
-        Picked::Open(Choice::Item(Item::App(app))) => {
+        Picked::Open(Choice::Item(Item::App(app, _))) => {
             apps::launch(&app.target())?;
             history::save(
                 &apps_history,
-                history::launched(&settings.recent_apps, &app.id),
+                history::used(&settings.recent_apps, &app.id, settings.now),
             )?;
             true
         }
@@ -256,7 +279,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
             if launched {
                 history::save(
                     &apps_history,
-                    history::launched(&settings.recent_apps, &app.id),
+                    history::used(&settings.recent_apps, &app.id, settings.now),
                 )?;
             }
             launched
@@ -265,11 +288,11 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
             system::run(command)?;
             true
         }
-        Picked::Open(Choice::Item(Item::Entry(entry))) => {
+        Picked::Open(Choice::Item(Item::Entry(entry, _))) => {
             apps::launch(&entry.path)?;
             history::save(
                 &files_history,
-                history::launched(&settings.recent_files, &entry.path),
+                history::used(&settings.recent_files, &entry.path, settings.now),
             )?;
             true
         }

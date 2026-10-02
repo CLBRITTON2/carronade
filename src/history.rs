@@ -1,5 +1,6 @@
-//! The apps launched and the entries opened, most recent first, so they lead their lists.
+//! How often and how lately each app was launched and each entry opened, which ranks them in their lists.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -10,8 +11,25 @@ use crate::store;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct History {
-    /// `App::id`s in the apps history, `Entry::path`s in the files one.
+    used: Vec<Use>,
+}
+
+/// The history carronade 0.3.0 and earlier saved: keys, most recent first, without counts.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Order {
     launched: Vec<String>,
+}
+
+/// The uses of one app or entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Use {
+    /// An `App::id` in the apps history, an `Entry::path` in the files one.
+    key: String,
+    count: u32,
+    /// Seconds since the Unix epoch.
+    last: u64,
 }
 
 /// `%LOCALAPPDATA%\carronade\history.toml`, the apps launched.
@@ -24,54 +42,118 @@ pub fn files_path() -> Result<PathBuf, Error> {
     store::path("files-history.toml")
 }
 
-/// The keys `save` wrote to `path`, most recent first. Empty before the first launch.
-pub fn load(path: &Path) -> Result<Vec<String>, Error> {
-    Ok(store::load::<History>(path)?.map_or_else(Vec::new, |history| history.launched))
+/// The uses `save` wrote to `path`, empty before the first. A history of 0.3.0 or earlier loads as one use per key, a
+/// second apart before `now` in its order.
+pub fn load(path: &Path, now: u64) -> Result<Vec<Use>, Error> {
+    match store::load::<History>(path) {
+        Ok(history) => Ok(history.map_or_else(Vec::new, |history| history.used)),
+        Err(error @ Error::StoreParse { .. }) => match store::load::<Order>(path) {
+            Ok(Some(order)) => Ok(counted(order, now)),
+            Ok(None) | Err(_) => Err(error),
+        },
+        Err(error) => Err(error),
+    }
 }
 
-pub fn save(path: &Path, launched: Vec<String>) -> Result<(), Error> {
-    store::save(path, &History { launched })
-}
-
-/// `recent` with `key` moved to the front.
-pub fn launched(recent: &[String], key: &str) -> Vec<String> {
-    std::iter::once(key.to_owned())
-        .chain(recent.iter().filter(|other| *other != key).cloned())
+fn counted(order: Order, now: u64) -> Vec<Use> {
+    (0..)
+        .zip(order.launched)
+        .map(|(age, key)| Use {
+            key,
+            count: 1,
+            last: now.saturating_sub(age),
+        })
         .collect()
 }
 
-/// `items` with the ones whose `key` is in `recent` first, in its order, and the rest after in their own.
-pub fn by_recent<T>(items: Vec<T>, recent: &[String], key: fn(&T) -> &str) -> Vec<T> {
-    let mut items = items;
-    items.sort_by_cached_key(|item| {
-        recent
-            .iter()
-            .position(|other| other == key(item))
-            .unwrap_or(recent.len())
-    });
-    items
+pub fn save(path: &Path, used: Vec<Use>) -> Result<(), Error> {
+    store::save(path, &History { used })
+}
+
+/// `uses` with one more use of `key` at `now`.
+pub fn used(uses: &[Use], key: &str, now: u64) -> Vec<Use> {
+    let count = uses
+        .iter()
+        .find(|other| other.key == key)
+        .map_or(0, |other| other.count);
+    let this = Use {
+        key: key.to_owned(),
+        count: count.saturating_add(1),
+        last: now,
+    };
+    std::iter::once(this)
+        .chain(uses.iter().filter(|other| other.key != key).cloned())
+        .collect()
+}
+
+/// Score added to a match per doubling of its frecency, so a daily favorite gains about what a well-placed letter
+/// earns and never outranks a much better match.
+const BOOST: i32 = 4;
+
+/// The score each key's uses add to its matches by `now`: `BOOST` per doubling of zoxide's frecency, the count
+/// weighted by the age of the last use (https://github.com/ajeetdsouza/zoxide/wiki/Algorithm).
+pub fn boosts(uses: &[Use], now: u64) -> HashMap<String, i32> {
+    uses.iter()
+        .map(|this| {
+            let age = now.saturating_sub(this.last);
+            let weight = match age {
+                0..3_600 => 16,
+                3_600..86_400 => 8,
+                86_400..604_800 => 2,
+                _ => 1,
+            };
+            let frecency = this.count.saturating_mul(weight);
+            let doublings = frecency.saturating_add(1).ilog2() as i32;
+            (this.key.clone(), BOOST * doublings)
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn keys(items: &[String]) -> Vec<&str> {
-        items.iter().map(String::as_str).collect()
+    const NOW: u64 = 10_000_000;
+
+    fn one(key: &str, count: u32, last: u64) -> Use {
+        Use {
+            key: key.to_owned(),
+            count,
+            last,
+        }
     }
 
     #[test]
-    fn recent_items_lead_in_launch_order_and_the_rest_keep_theirs() {
-        let items = ["a", "b", "c", "d", "e"].map(String::from).into();
-        let recent = ["d", "gone", "b"].map(String::from);
-        let sorted = by_recent(items, &recent, String::as_str);
-        assert_eq!(keys(&sorted), ["d", "b", "a", "c", "e"]);
+    fn a_use_counts_once_more_and_moves_to_the_front() {
+        let uses = [one("a", 2, 10), one("b", 5, 20)];
+        assert_eq!(used(&uses, "b", NOW), [one("b", 6, NOW), one("a", 2, 10)]);
+        assert_eq!(
+            used(&uses, "new", NOW),
+            [one("new", 1, NOW), one("a", 2, 10), one("b", 5, 20)]
+        );
     }
 
     #[test]
-    fn a_launch_moves_the_key_to_the_front_once() {
-        let recent = ["a", "b", "c"].map(String::from);
-        assert_eq!(launched(&recent, "b"), ["b", "a", "c"]);
-        assert_eq!(launched(&recent, "new"), ["new", "a", "b", "c"]);
+    fn frequent_and_recent_uses_boost_more() {
+        let uses = [
+            one("daily", 30, NOW - 60),
+            one("once now", 1, NOW),
+            one("once last month", 1, NOW - 2_592_000),
+        ];
+        let boosts = boosts(&uses, NOW);
+        assert_eq!(boosts.get("daily"), Some(&(BOOST * 8)));
+        assert_eq!(boosts.get("once now"), Some(&(BOOST * 4)));
+        assert_eq!(boosts.get("once last month"), Some(&BOOST));
+    }
+
+    #[test]
+    fn an_old_order_counts_one_use_each_in_its_order() {
+        let order = Order {
+            launched: ["a", "b"].map(String::from).into(),
+        };
+        assert_eq!(
+            counted(order, NOW),
+            [one("a", 1, NOW), one("b", 1, NOW - 1)]
+        );
     }
 }

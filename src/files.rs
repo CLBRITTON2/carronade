@@ -26,6 +26,10 @@ impl Row for Entry {
     fn icon(&self) -> Option<Picture> {
         Some(Picture::Shell(self.path.clone()))
     }
+
+    fn boost(&self) -> i32 {
+        0
+    }
 }
 
 /// Every file and folder below `roots`, shallowest first, then by label. It leaves out what git ignores and hidden
