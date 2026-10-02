@@ -14,6 +14,7 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 - drun lists Lock, Sign out, Hibernate, Restart and Shut down after the apps, with icons. Picking one runs it at
   once.
 - The mouse wheel moves the selection a row per notch, stopping at either end of the list.
+- Ctrl+Shift+Enter in drun launches the selected app as administrator. Declining the UAC prompt exits as a cancel.
 
 ## [0.1.0] - 2026-10-01
 

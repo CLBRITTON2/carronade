@@ -106,6 +106,8 @@ pub enum Action<T> {
     Switch,
     /// Ctrl+Enter on a match.
     Terminal(T),
+    /// Ctrl+Shift+Enter on a match.
+    Admin(T),
 }
 
 /// What `browse` does after an `Action`.
@@ -175,7 +177,7 @@ pub fn pick<T: Row + Clone>(config: Config, items: Vec<T>) -> Result<Choice<T>, 
     browse(config, items, None, |action| {
         Ok(match action {
             Action::Pick(choice) => Step::Done(choice),
-            Action::Switch | Action::Terminal(_) => Step::Stay,
+            Action::Switch | Action::Terminal(_) | Action::Admin(_) => Step::Stay,
         })
     })
 }
@@ -213,6 +215,7 @@ fn steps<T: Row + Clone, R>(
             Action::Pick(Choice::Cancel) => Action::Pick(Choice::Cancel),
             Action::Switch => Action::Switch,
             Action::Terminal(row) => Action::Terminal(item(row)?),
+            Action::Admin(row) => Action::Admin(item(row)?),
         };
         match next(action)? {
             Step::Done(choice) => return Ok(choice),
@@ -630,15 +633,18 @@ extern "system" fn window_proc(
 /// Handles the keys that steer the picker or edit the query, returning false for the rest.
 fn key(key: VIRTUAL_KEY) -> Result<bool, Error> {
     let ctrl = held(VK_CONTROL);
+    let shift = held(VK_SHIFT);
     match key {
         VK_ESCAPE => finish(Ok(Action::Pick(Choice::Cancel)))?,
         VK_RETURN if ctrl => {
             if let Some(row) = with(|state| state.shown.get(state.cursor).copied())? {
-                finish(Ok(Action::Terminal(row)))?;
+                finish(Ok(match shift {
+                    true => Action::Admin(row),
+                    false => Action::Terminal(row),
+                }))?;
             }
         }
         VK_RETURN => {
-            let shift = held(VK_SHIFT);
             let choice = with(|state| {
                 let query = state.line.text();
                 match shift {

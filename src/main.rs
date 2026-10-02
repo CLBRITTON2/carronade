@@ -197,11 +197,13 @@ enum Picked {
     Open(Choice<Item>),
     /// Ctrl+Enter on a file or folder.
     Terminal(files::Entry),
+    /// Ctrl+Shift+Enter on an app.
+    Admin(App),
 }
 
-/// Opens the pick from apps and files, starting on `start`: launches an app, recording it as recent, runs a system
-/// command, opens a file or folder, starts the terminal in an entry's folder, or runs the typed text as the Run dialog would. Returns whether
-/// there was a pick.
+/// Opens the pick from apps and files, starting on `start`: launches an app, elevated or not, recording it as recent,
+/// runs a system command, opens a file or folder, starts the terminal in an entry's folder, or runs the typed text as
+/// the Run dialog would. Returns whether there was a pick, which a declined UAC prompt is not.
 fn search(config: Config, start: Kind) -> Result<bool, Error> {
     let history_path = history::path()?;
     let settings = Settings {
@@ -231,6 +233,8 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
             }
             Action::Terminal(Item::Entry(entry)) => Step::Done(Picked::Terminal(entry)),
             Action::Terminal(Item::App(_) | Item::Command(_)) => Step::Stay,
+            Action::Admin(Item::App(app)) => Step::Done(Picked::Admin(app)),
+            Action::Admin(Item::Command(_) | Item::Entry(_)) => Step::Stay,
         })
     })?;
     let picked = match choice {
@@ -238,6 +242,13 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
             apps::launch(&app.target())?;
             history::save(&history_path, history::launched(&settings.recent, &app.id))?;
             true
+        }
+        Picked::Admin(app) => {
+            let launched = apps::launch_as_admin(&app.target())?;
+            if launched {
+                history::save(&history_path, history::launched(&settings.recent, &app.id))?;
+            }
+            launched
         }
         Picked::Open(Choice::Item(Item::Command(command))) => {
             system::run(command)?;

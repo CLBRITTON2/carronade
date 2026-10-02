@@ -88,3 +88,13 @@ fn launching_a_missing_app_names_it_in_the_error() {
         "got {result:?}"
     );
 }
+
+#[test]
+fn launching_a_missing_app_as_admin_names_it_in_the_error() {
+    let target = "shell:AppsFolder\\carronade.missing_0000000000000!App";
+    let result = apps::launch_as_admin(target);
+    assert!(
+        matches!(&result, Err(CarronadeError::Launch { target: failed, .. }) if failed == target),
+        "got {result:?}"
+    );
+}

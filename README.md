@@ -38,6 +38,7 @@ match runs the typed text as the Run dialog would.
 | Enter | pick the selection, or the typed text when nothing matches |
 | Shift+Enter | pick the typed text |
 | Ctrl+Enter | in files, start `files.terminal` in the selected folder or the selected file's folder |
+| Ctrl+Shift+Enter | in drun, launch the selected app as administrator |
 | Tab | switch between drun and files |
 | Up, Down, Ctrl+P, Ctrl+N | move the selection |
 | Left, Right | move the selection a column when the caret is at that end of the query, else move the caret |
