@@ -80,7 +80,7 @@ struct CacheRef<'a> {
     app: &'a [App],
 }
 
-/// `%LOCALAPPDATA%\carronade\apps.toml`, the apps drun found last time.
+/// `%LOCALAPPDATA%\carronade\apps.toml`, the apps found last time.
 pub fn cache_path() -> Result<PathBuf, Error> {
     store::path("apps.toml")
 }

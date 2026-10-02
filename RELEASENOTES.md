@@ -9,6 +9,8 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 - Icons come from `%LOCALAPPDATA%\carronade\icons.bin` after their first load, which takes well under a millisecond
   instead of tens per icon. A cached icon is loaded again from the shell once it is a week old, and the cache keeps
   the 1000 most recently loaded.
+- The Start menu mode is `carronade apps`, and its config section is `[apps]`. Rename `drun` in hotkey bindings and
+  `[drun]` in `config.toml`, which otherwise fails to load.
 
 ## [0.2.0] - 2026-10-02
 

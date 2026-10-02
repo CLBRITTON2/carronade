@@ -129,8 +129,8 @@ fn words_from_anywhere_in_the_path_pick_a_deep_file() -> Outcome {
 }
 
 #[test]
-fn tab_in_drun_searches_the_files_for_the_query_typed() -> Outcome {
-    picks_the_deep_file("files-switch", "drun", |picker| {
+fn tab_in_apps_searches_the_files_for_the_query_typed() -> Outcome {
+    picks_the_deep_file("files-switch", "apps", |picker| {
         picker.type_query("integ run")?;
         picker.press(VK_TAB)?;
         picker.press(VK_RETURN)
@@ -145,8 +145,8 @@ fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome
     // A checkout with core.autocrlf, as on the CI runner, has CRLF line ends.
     let shipped = std::fs::read_to_string(CONFIG)?.replace("\r\n", "\n");
     let roots = "roots = ['~\\dev']\ncache = true";
-    let drun = "[drun]\ncache = true";
-    for section in [roots, drun] {
+    let apps = "[apps]\ncache = true";
+    for section in [roots, apps] {
         if !shipped.contains(section) {
             return Err(format!("the shipped config has no {section:?}").into());
         }
@@ -156,7 +156,7 @@ fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome
             roots,
             &format!("roots = ['{}']\ncache = false", root.display()),
         )
-        .replace(drun, "[drun]\ncache = false");
+        .replace(apps, "[apps]\ncache = false");
     std::fs::write(&config, text)?;
     let mut command = carronade(config.to_str().ok_or("config path is not Unicode")?);
     command.arg(mode);

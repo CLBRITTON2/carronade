@@ -196,7 +196,7 @@ mod tests {
         selected = "#ffffff"
         icon = "20px"
         gap = "3px"
-        [drun]
+        [apps]
         cache = false
         [files]
         roots = []

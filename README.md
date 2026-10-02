@@ -15,22 +15,22 @@ Copy [config.toml](config.toml) to `%APPDATA%\carronade\config.toml`. carronade 
 
 ```powershell
 # launch a Start menu app
-carronade drun
+carronade apps
 # open a file or folder below files.roots
 carronade files
 # pick a line from stdin and print it
 'one', 'two' | carronade dmenu
 # use another config
-carronade --config C:\path\to\config.toml drun
+carronade --config C:\path\to\config.toml apps
 ```
 
-drun also lists Lock, Sign out, Hibernate, Restart and Shut down after the apps, each with a Segoe MDL2 Assets icon.
-Picking one runs it at once, with no confirmation. Tab switches between drun and files and keeps the query. Bind
-`carronade drun` to a hotkey in your window manager.
+apps also lists Lock, Sign out, Hibernate, Restart and Shut down after the apps, each with a Segoe MDL2 Assets icon.
+Picking one runs it at once, with no confirmation. Tab switches between apps and files and keeps the query. Bind
+`carronade apps` to a hotkey in your window manager.
 In GlazeWM, also add an `ignore` window rule for `window_process: { equals: 'carronade' }`.
 
 Matches contain every typed word in any order, ignoring case. Name matches rank above folder matches, and word starts
-above matches inside a word. Ties keep list order: recent first, then the rest by name in drun and shallowest first in
+above matches inside a word. Ties keep list order: recent first, then the rest by name in apps and shallowest first in
 files. Enter with no
 match runs the typed text as the Run dialog would.
 
@@ -39,8 +39,8 @@ match runs the typed text as the Run dialog would.
 | Enter | pick the selection, or the typed text when nothing matches |
 | Shift+Enter | pick the typed text |
 | Ctrl+Enter | in files, start `files.terminal` in the selected folder or the selected file's folder |
-| Ctrl+Shift+Enter | in drun, launch the selected app as administrator |
-| Tab | switch between drun and files |
+| Ctrl+Shift+Enter | in apps, launch the selected app as administrator |
+| Tab | switch between apps and files |
 | Up, Down, Ctrl+P, Ctrl+N | move the selection |
 | Left, Right | move the selection a column when the caret is at that end of the query, else move the caret |
 | Esc | cancel |

@@ -16,7 +16,7 @@ border_color = "#ffffff33"
 radius = "0.5em"
 # image = '~\Pictures\wallpaper.jpg'
 
-# The text box at the top. prompt is drawn left of the typed text in prompt_font. drun and files draw files_icon or
+# The text box at the top. prompt is drawn left of the typed text in prompt_font. apps and files draw files_icon or
 # apps_icon at its right end, in prompt_font and placeholder_color: a click on it, or Tab, switches to the other list.
 [input]
 margin = "1em"
@@ -51,11 +51,11 @@ gap = "0.75em"
 
 # The Start menu mode. cache opens on the apps found last time, kept in %LOCALAPPDATA%\carronade\apps.toml, and
 # lists them again after the picker closes: the shell takes hundreds of ms to list them.
-[drun]
+[apps]
 cache = true
 
 # The file search mode. It lists every file and folder below roots, leaving out what git ignores and hidden ones.
-# cache works as drun's does, kept in %LOCALAPPDATA%\carronade\files.toml. Ctrl+Enter starts terminal, a program as
+# cache works as apps' does, kept in %LOCALAPPDATA%\carronade\files.toml. Ctrl+Enter starts terminal, a program as
 # the Run dialog takes it, in the selected folder or the folder of the selected file.
 [files]
 roots = ['~\dev']

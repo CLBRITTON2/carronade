@@ -1,4 +1,4 @@
-//! Commands that lock, end the session or power the machine down, listed in drun after the apps.
+//! Commands that lock, end the session or power the machine down, listed after the apps.
 
 use windows::Win32::Foundation::{CloseHandle, ERROR_NOT_ALL_ASSIGNED, GetLastError, HANDLE, LUID};
 use windows::Win32::Security::{

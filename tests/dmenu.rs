@@ -216,7 +216,7 @@ fn unknown_mode_fails_with_usage() -> Outcome {
     assert_eq!(
         String::from_utf8(output.stderr)?,
         format!(
-            "carronade: usage: carronade [--config <path>] <dmenu|drun|files>, got {:?}\n",
+            "carronade: usage: carronade [--config <path>] <dmenu|apps|files>, got {:?}\n",
             ["--config", CONFIG, "show"]
         )
     );

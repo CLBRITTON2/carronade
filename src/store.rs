@@ -1,4 +1,4 @@
-//! The TOML files drun keeps between runs, in `%LOCALAPPDATA%\carronade`.
+//! The TOML files carronade keeps between runs, in `%LOCALAPPDATA%\carronade`.
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};

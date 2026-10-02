@@ -1,4 +1,4 @@
-//! The apps drun launched and the entries files opened, most recent first, so they lead their lists.
+//! The apps launched and the entries opened, most recent first, so they lead their lists.
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +14,7 @@ struct History {
     launched: Vec<String>,
 }
 
-/// `%LOCALAPPDATA%\carronade\history.toml`, the apps drun launched.
+/// `%LOCALAPPDATA%\carronade\history.toml`, the apps launched.
 pub fn apps_path() -> Result<PathBuf, Error> {
     store::path("history.toml")
 }

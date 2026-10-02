@@ -1,5 +1,5 @@
-//! `carronade dmenu` prints the stdin line picked, `carronade drun` launches the Start menu app picked, and
-//! `carronade files` opens the file or folder picked from below `files.roots`. drun and files switch to each other in
+//! `carronade dmenu` prints the stdin line picked, `carronade apps` launches the Start menu app picked, and
+//! `carronade files` opens the file or folder picked from below `files.roots`. apps and files switch to each other in
 //! the same window. Each exits 1 on cancel and 2 on error. `--config <path>` replaces
 //! `%APPDATA%\carronade\config.toml`.
 
@@ -35,7 +35,7 @@ fn main() -> ExitCode {
 
 enum Mode {
     Dmenu,
-    Drun,
+    Apps,
     Files,
 }
 
@@ -48,14 +48,14 @@ fn run(args: Vec<String>) -> Result<bool, Error> {
     };
     let mode = match mode.as_str() {
         "dmenu" => Mode::Dmenu,
-        "drun" => Mode::Drun,
+        "apps" => Mode::Apps,
         "files" => Mode::Files,
         _ => return Err(Error::Usage(args)),
     };
     let config = config::load(&path.map_or_else(config::path, Ok)?)?;
     match mode {
         Mode::Dmenu => dmenu(config),
-        Mode::Drun => search(config, Kind::Apps),
+        Mode::Apps => search(config, Kind::Apps),
         Mode::Files => search(config, Kind::Files),
     }
 }
@@ -73,7 +73,7 @@ fn dmenu(config: Config) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// The two lists drun and files switch between in one window.
+/// The two lists apps and files switch between in one window.
 #[derive(Clone, Copy)]
 enum Kind {
     Apps,
@@ -116,7 +116,7 @@ impl Row for Item {
 
 /// What a search needs from the config, which the picker takes.
 struct Settings {
-    drun_cache: bool,
+    apps_cache: bool,
     files_cache: bool,
     roots: Vec<PathBuf>,
     terminal: String,
@@ -148,7 +148,7 @@ impl Found {
             Kind::Apps => {
                 if self.apps.is_none() {
                     let found = cached(
-                        settings.drun_cache,
+                        settings.apps_cache,
                         apps::cache_path,
                         apps::load,
                         apps::list,
@@ -214,7 +214,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
     let apps_history = history::apps_path()?;
     let files_history = history::files_path()?;
     let settings = Settings {
-        drun_cache: config.drun.cache,
+        apps_cache: config.apps.cache,
         files_cache: config.files.cache,
         roots: config.files.roots.clone(),
         terminal: config.files.terminal.clone(),
@@ -287,7 +287,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         }
     };
     // After the picker closes, since listing beside it slowed its startup by tens of ms.
-    if settings.drun_cache && found.apps.is_some() {
+    if settings.apps_cache && found.apps.is_some() {
         apps::save(&apps::cache_path()?, &apps::list()?)?;
     }
     if settings.files_cache && found.files.is_some() {

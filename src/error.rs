@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("usage: carronade [--config <path>] <dmenu|drun|files>, got {0:?}")]
+    #[error("usage: carronade [--config <path>] <dmenu|apps|files>, got {0:?}")]
     Usage(Vec<String>),
     #[error("reading the config {path:?} failed: {source}")]
     ConfigRead {
