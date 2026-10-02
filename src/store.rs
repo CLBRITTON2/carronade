@@ -19,16 +19,13 @@ pub fn path(name: &str) -> Result<PathBuf, Error> {
 
 /// What `save` wrote to `path`, or `None` before the first save.
 pub fn load<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, Error> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(source) => {
-            return Err(Error::StoreRead {
-                path: path.to_owned(),
-                source,
-            });
-        }
+    let Some(bytes) = read(path)? else {
+        return Ok(None);
     };
+    let text = String::from_utf8(bytes).map_err(|source| Error::StoreRead {
+        path: path.to_owned(),
+        source: std::io::Error::new(ErrorKind::InvalidData, source),
+    })?;
     toml::from_str(&text)
         .map(Some)
         .map_err(|source| Error::StoreParse {
@@ -43,7 +40,25 @@ pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
         path: path.to_owned(),
         source,
     })?;
-    let temporary = path.with_extension("toml.tmp");
+    write(path, text.as_bytes())
+}
+
+/// The bytes `write` wrote to `path`, or `None` before the first write.
+pub fn read(path: &Path) -> Result<Option<Vec<u8>>, Error> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(Error::StoreRead {
+            path: path.to_owned(),
+            source,
+        }),
+    }
+}
+
+/// Writes `bytes` to `path` through a temporary file so a reader never sees half of them.
+pub fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
     let write = |source| Error::StoreWrite {
         path: path.to_owned(),
         source,
@@ -51,6 +66,6 @@ pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder).map_err(write)?;
     }
-    std::fs::write(&temporary, text).map_err(write)?;
+    std::fs::write(&temporary, bytes).map_err(write)?;
     std::fs::rename(&temporary, path).map_err(write)
 }

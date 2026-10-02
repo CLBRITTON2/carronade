@@ -77,6 +77,10 @@ pub enum Error {
         #[source]
         source: Box<toml::de::Error>,
     },
+    #[error("the system clock is before 1970: {0}")]
+    Clock(#[source] std::time::SystemTimeError),
+    #[error("{path:?} is not an icon cache carronade wrote, delete it to start it over")]
+    IconCache { path: PathBuf },
     #[error("writing {path:?} failed: {source}")]
     StoreWrite {
         path: PathBuf,

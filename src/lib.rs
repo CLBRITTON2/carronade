@@ -5,6 +5,7 @@ pub mod config;
 pub mod error;
 pub mod files;
 pub mod history;
+pub mod icons;
 pub mod layout;
 pub mod menu;
 pub mod picker;

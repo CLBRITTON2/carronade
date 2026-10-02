@@ -4,15 +4,16 @@
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{
     GENERIC_READ, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
 };
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES,
     D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE,
     D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Bitmap,
@@ -29,14 +30,13 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
     AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
-    CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteObject, GetMonitorInfoW, HBITMAP,
-    HDC, HPALETTE, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SelectObject,
+    CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, GetMonitorInfoW, HDC,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SelectObject,
 };
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
-    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
-    WICBitmapInterpolationModeHighQualityCubic, WICBitmapPaletteTypeMedianCut,
-    WICBitmapUsePremultipliedAlpha, WICDecodeMetadataCacheOnDemand,
+    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut,
+    WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::{
@@ -67,6 +67,7 @@ use windows_numerics::Matrix3x2;
 use crate::apps;
 use crate::config::{Color, Config, Length};
 use crate::error::{Error, last, win32};
+use crate::icons::{self, Cached, Pixels};
 use crate::layout::{self, Layout, Rect};
 use crate::menu::{self, Choice, Line};
 
@@ -141,6 +142,10 @@ struct State {
     pointer: Option<(i16, i16)>,
     /// The part of a wheel notch turned so far.
     wheel: i32,
+    /// `icons.bin`, read when the first page with shell icons shows.
+    cache: Option<Vec<Cached>>,
+    /// The icons the shell gave this run, for `icons.bin` when the picker closes.
+    fetched: Vec<Cached>,
     canvas: Canvas,
 }
 
@@ -195,7 +200,12 @@ pub fn browse<T: Row + Clone, R>(
     let choice = steps(items, next);
     unsafe { DestroyWindow(window) }.map_err(win32("DestroyWindow"))?;
     // Released now: a COM object released by the thread-local destructors at exit changes the exit code.
-    STATE.take();
+    let icons = STATE.take().map(|state| (state.fetched, state.cache));
+    if let Some((fetched, Some(previous))) = icons
+        && !fetched.is_empty()
+    {
+        icons::save(&icons::path()?, &icons::merged(fetched, previous))?;
+    }
     choice
 }
 
@@ -420,6 +430,8 @@ fn open(
         surrogate: None,
         pointer: None,
         wheel: 0,
+        cache: None,
+        fetched: Vec::new(),
         canvas: Canvas {
             window,
             origin,
@@ -838,20 +850,46 @@ fn with<T>(f: impl FnOnce(&mut State) -> T) -> Result<T, Error> {
     })
 }
 
-/// Loads the icons of the page on show, then draws it.
+/// Loads the icons of the page on show, from `icons.bin` while they are fresh there, then draws it.
 fn render() -> Result<(), Error> {
-    let (pending, size) = with(|state| (state.unloaded(), state.canvas.icon_size()))?;
+    let (pending, side, wic) = with(|state| {
+        let canvas = &state.canvas;
+        (state.unloaded(), canvas.icon_size(), canvas.wic.clone())
+    })?;
+    if !pending.is_empty() && with(|state| state.cache.is_none())? {
+        let cache = icons::load(&icons::path()?)?;
+        with(|state| state.cache = Some(cache))?;
+    }
+    let now = now()?;
     for (index, target) in pending {
-        // Outside the borrow: the shell pumps messages while it loads.
-        let icon = apps::display_icon(&target, size)?;
+        let pixels = match with(|state| state.cached(&target, side, now))? {
+            Some(pixels) => pixels,
+            None => {
+                // Outside the borrow: the shell pumps messages while it loads.
+                let pixels = icons::fetch(&wic, &target, side)?;
+                let fetched = Cached {
+                    target,
+                    fetched: now,
+                    pixels: pixels.clone(),
+                };
+                with(|state| state.fetched.push(fetched))?;
+                pixels
+            }
+        };
         with(|state| {
             state
                 .canvas
-                .bitmap(icon, size)
+                .bitmap(&pixels)
                 .map(|bitmap| state.set_icon(index, bitmap))
         })??;
     }
     with(State::draw)?
+}
+
+/// Seconds since the Unix epoch.
+fn now() -> Result<u64, Error> {
+    let since = SystemTime::now().duration_since(UNIX_EPOCH);
+    Ok(since.map_err(Error::Clock)?.as_secs())
 }
 
 impl State {
@@ -865,6 +903,13 @@ impl State {
         let first = menu::first(self.cursor, self.page());
         let rest = self.shown.get(first..).unwrap_or_default();
         rest.get(..self.page().get()).unwrap_or(rest)
+    }
+
+    /// The icon for `target` the shell gave this run, else the one `icons.bin` holds while it is fresh.
+    fn cached(&self, target: &str, side: u32, now: u64) -> Option<Pixels> {
+        let this_run = icons::find(&self.fetched, target, side, now);
+        let saved = || icons::find(self.cache.as_deref()?, target, side, now);
+        this_run.or_else(saved).cloned()
     }
 
     fn unloaded(&self) -> Vec<(usize, String)> {
@@ -1012,8 +1057,8 @@ impl Canvas {
         length.px(self.em, self.scale)
     }
 
-    fn icon_size(&self) -> i32 {
-        self.px(self.config.element.icon).round() as i32
+    fn icon_size(&self) -> u32 {
+        self.px(self.config.element.icon).round() as u32
     }
 
     fn fill(&self, rect: Rect, radius: f32, color: Color) {
@@ -1066,31 +1111,26 @@ impl Canvas {
         Ok(x - scroll)
     }
 
-    /// An icon from the shell as a `size` px square bitmap for this canvas. Frees `icon`.
-    fn bitmap(&self, icon: HBITMAP, size: i32) -> Result<ID2D1Bitmap, Error> {
-        let bitmap = unsafe {
-            self.wic.CreateBitmapFromHBITMAP(
-                icon,
-                HPALETTE::default(),
-                WICBitmapUsePremultipliedAlpha,
-            )
+    /// `pixels` as a bitmap for this canvas, a pixel per DIP like the render target.
+    fn bitmap(&self, pixels: &Pixels) -> Result<ID2D1Bitmap, Error> {
+        let size = D2D_SIZE_U {
+            width: pixels.side,
+            height: pixels.side,
+        };
+        let properties = D2D1_BITMAP_PROPERTIES {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+        };
+        let data = pixels.bgra.as_ptr().cast();
+        unsafe {
+            self.target
+                .CreateBitmap(size, Some(data), pixels.side * 4, &properties)
         }
-        .map_err(win32("CreateBitmapFromHBITMAP"))
-        .and_then(|wic| {
-            let scaler =
-                unsafe { self.wic.CreateBitmapScaler() }.map_err(win32("CreateBitmapScaler"))?;
-            let side = size.unsigned_abs();
-            unsafe {
-                scaler.Initialize(&wic, side, side, WICBitmapInterpolationModeHighQualityCubic)
-            }
-            .map_err(win32("IWICBitmapScaler::Initialize"))?;
-            unsafe { self.target.CreateBitmapFromWicBitmap(&scaler, None) }
-                .map_err(win32("CreateBitmapFromWicBitmap"))
-        });
-        unsafe { DeleteObject(icon.into()) }
-            .ok()
-            .map_err(win32("DeleteObject"))?;
-        bitmap
+        .map_err(win32("ID2D1RenderTarget::CreateBitmap"))
     }
 
     /// Puts the drawn frame on screen.
