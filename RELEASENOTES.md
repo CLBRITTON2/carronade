@@ -4,7 +4,7 @@ Each release has a `## [<version>] - <date>` section, newest first. `scripts/rel
 the tagged version as its GitHub release notes, and refuses to release a version without one. Changes since the last
 release go under `## [Unreleased]`, renamed to the version when it is tagged.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-02
 
 - Icons come from `%LOCALAPPDATA%\carronade\icons.bin` after their first load, which takes well under a millisecond
   instead of tens per icon. A cached icon is loaded again from the shell once it is a week old, and the cache keeps
