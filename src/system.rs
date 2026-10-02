@@ -46,6 +46,10 @@ impl Row for Command {
         }
     }
 
+    fn alias(&self) -> Option<&str> {
+        None
+    }
+
     /// Segoe MDL2 Assets glyphs: Lock, LeaveChat, QuietHours, UpdateRestore and PowerButton.
     fn icon(&self) -> Option<Picture> {
         Some(Picture::Glyph(match self {

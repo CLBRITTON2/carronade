@@ -3,19 +3,20 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use windows::Win32::Foundation::{ERROR_CANCELLED, SIZE};
+use windows::Win32::Foundation::{ERROR_CANCELLED, ERROR_NOT_FOUND, SIZE};
 use windows::Win32::Graphics::Gdi::{BITMAP, DeleteObject, GetObjectW, HBITMAP};
+use windows::Win32::Storage::EnhancedStorage::PKEY_Link_TargetParsingPath;
 use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, IBindCtx,
 };
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, IShellItemImageFactory,
-    KF_FLAG_DEFAULT, SEE_MASK_FLAG_NO_UI, SHCreateItemFromParsingName, SHELLEXECUTEINFOW,
-    SHGetKnownFolderItem, SIGDN, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING, SIIGBF_ICONONLY,
-    ShellExecuteExW,
+    BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, IShellItem2,
+    IShellItemImageFactory, KF_FLAG_DEFAULT, SEE_MASK_FLAG_NO_UI, SHCreateItemFromParsingName,
+    SHELLEXECUTEINFOW, SHGetKnownFolderItem, SIGDN, SIGDN_NORMALDISPLAY,
+    SIGDN_PARENTRELATIVEPARSING, SIIGBF_ICONONLY, ShellExecuteExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-use windows::core::{HSTRING, PCWSTR, w};
+use windows::core::{HSTRING, Interface, PCWSTR, PWSTR, w};
 
 use crate::error::{Error, win32};
 use crate::picker::{Picture, Row};
@@ -27,6 +28,8 @@ pub struct App {
     pub name: String,
     /// The AppsFolder parsing name: an AUMID for packaged apps, a known-folder path for the rest.
     pub id: String,
+    /// The file name, without `.exe`, of the program its shortcut starts. Packaged apps have none.
+    pub exe: Option<String>,
 }
 
 impl App {
@@ -38,6 +41,10 @@ impl App {
 impl Row for App {
     fn label(&self) -> &str {
         &self.name
+    }
+
+    fn alias(&self) -> Option<&str> {
+        self.exe.as_deref()
     }
 
     fn icon(&self) -> Option<Picture> {
@@ -66,6 +73,7 @@ pub fn list() -> Result<Vec<App>, Error> {
         apps.push(App {
             name: display_name(&item, SIGDN_NORMALDISPLAY)?,
             id: display_name(&item, SIGDN_PARENTRELATIVEPARSING)?,
+            exe: link_target(&item)?.as_deref().and_then(exe_name),
         });
     }
     apps.sort_by_key(|app| app.name.to_lowercase());
@@ -237,9 +245,36 @@ pub(crate) fn com() -> Result<(), Error> {
 
 fn display_name(item: &IShellItem, form: SIGDN) -> Result<String, Error> {
     let name = unsafe { item.GetDisplayName(form) }.map_err(win32("IShellItem::GetDisplayName"))?;
-    let text = unsafe { name.to_string() };
-    unsafe { CoTaskMemFree(Some(name.0 as _)) };
-    Ok(text?)
+    taken(name)
+}
+
+/// What the shortcut behind `item` opens, or `None` for an app with no shortcut, as packaged apps are.
+fn link_target(item: &IShellItem) -> Result<Option<String>, Error> {
+    let item: IShellItem2 = item
+        .cast()
+        .map_err(win32("IShellItem::cast::<IShellItem2>"))?;
+    match unsafe { item.GetString(&PKEY_Link_TargetParsingPath) } {
+        Ok(target) => taken(target).map(Some),
+        Err(error) if error.code() == ERROR_NOT_FOUND.to_hresult() => Ok(None),
+        Err(error) => Err(win32("IShellItem2::GetString(Link.TargetParsingPath)")(
+            error,
+        )),
+    }
+}
+
+/// The file name of `target` without its extension, when it is an exe.
+fn exe_name(target: &str) -> Option<String> {
+    let path = Path::new(target);
+    path.extension()
+        .filter(|extension| extension.eq_ignore_ascii_case("exe"))?;
+    path.file_stem()?.to_str().map(str::to_owned)
+}
+
+/// `text` as a `String`, freeing the shell's copy.
+fn taken(text: PWSTR) -> Result<String, Error> {
+    let owned = unsafe { text.to_string() };
+    unsafe { CoTaskMemFree(Some(text.0 as _)) };
+    Ok(owned?)
 }
 
 #[cfg(test)]
@@ -255,6 +290,28 @@ mod tests {
             }
         }
         pixels
+    }
+
+    #[test]
+    fn only_an_exe_target_names_an_exe() {
+        let names = [
+            "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+            "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+            "C:\\Windows\\system32\\services.msc",
+            "::{52205FD8-5DFB-447D-801A-D0B52F2E83E1}",
+            "https://nodejs.org/",
+        ]
+        .map(exe_name);
+        assert_eq!(
+            names,
+            [
+                Some("pwsh".to_owned()),
+                Some("WINWORD".to_owned()),
+                None,
+                None,
+                None
+            ]
+        );
     }
 
     #[test]

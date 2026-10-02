@@ -68,7 +68,7 @@ use crate::config::{Color, Config, Length};
 use crate::error::{Error, last, win32};
 use crate::icons::{self, Cached, Pixels};
 use crate::layout::{self, Layout, Rect};
-use crate::menu::{self, Choice, Line};
+use crate::menu::{self, Candidate, Choice, Line};
 use crate::store;
 
 const CLASS: PCWSTR = w!("carronade");
@@ -76,6 +76,8 @@ const CLASS: PCWSTR = w!("carronade");
 /// What the picker shows for an item: its label, and the picture beside it.
 pub trait Row {
     fn label(&self) -> &str;
+    /// Matched like the label, a little below it, but never drawn.
+    fn alias(&self) -> Option<&str>;
     fn icon(&self) -> Option<Picture>;
     /// Added to the score of the row's matches, and ranks the rows before anything is typed.
     fn boost(&self) -> i32;
@@ -84,6 +86,10 @@ pub trait Row {
 impl Row for String {
     fn label(&self) -> &str {
         self
+    }
+
+    fn alias(&self) -> Option<&str> {
+        None
     }
 
     fn icon(&self) -> Option<Picture> {
@@ -135,9 +141,8 @@ enum Icon {
 }
 
 struct State {
-    items: Vec<String>,
+    items: Vec<Candidate>,
     icons: Vec<Option<Icon>>,
-    boosts: Vec<i32>,
     shown: Vec<usize>,
     cursor: usize,
     line: Line,
@@ -253,14 +258,20 @@ fn steps<T: Row + Clone, R>(
 
 /// What the picker keeps of each item, by index.
 struct Rows {
-    labels: Vec<String>,
+    candidates: Vec<Candidate>,
     icons: Vec<Option<Icon>>,
-    boosts: Vec<i32>,
 }
 
 fn rows<T: Row>(items: &[T]) -> Rows {
     Rows {
-        labels: items.iter().map(|item| item.label().to_owned()).collect(),
+        candidates: items
+            .iter()
+            .map(|item| Candidate {
+                label: item.label().to_owned(),
+                alias: item.alias().map(str::to_owned),
+                boost: item.boost(),
+            })
+            .collect(),
         icons: items
             .iter()
             .map(|item| {
@@ -270,7 +281,6 @@ fn rows<T: Row>(items: &[T]) -> Rows {
                 })
             })
             .collect(),
-        boosts: items.iter().map(Row::boost).collect(),
     }
 }
 
@@ -436,10 +446,9 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
     };
 
     STATE.set(Some(State {
-        shown: menu::filter(&rows.labels, &rows.boosts, ""),
-        items: rows.labels,
+        shown: menu::filter(&rows.candidates, ""),
+        items: rows.candidates,
         icons: rows.icons,
-        boosts: rows.boosts,
         cursor: 0,
         line: Line::default(),
         switch,
@@ -730,7 +739,7 @@ fn edit(change: impl FnOnce(&Line) -> Line) -> Result<(), Error> {
     with(|state| {
         let line = change(&state.line);
         if line.text() != state.line.text() {
-            state.shown = menu::filter(&state.items, &state.boosts, &line.text());
+            state.shown = menu::filter(&state.items, &line.text());
             state.cursor = 0;
         }
         state.line = line;
@@ -934,10 +943,9 @@ impl State {
     }
 
     fn show(&mut self, rows: Rows, switch: String) {
-        self.shown = menu::filter(&rows.labels, &rows.boosts, &self.line.text());
-        self.items = rows.labels;
+        self.shown = menu::filter(&rows.candidates, &self.line.text());
+        self.items = rows.candidates;
         self.icons = rows.icons;
-        self.boosts = rows.boosts;
         self.cursor = 0;
         self.switch = Some(switch);
     }
@@ -1056,7 +1064,7 @@ impl State {
                     ..cell.label
                 },
             };
-            let text = self.items.get(index).map_or("", String::as_str);
+            let text = self.items.get(index).map_or("", |item| item.label.as_str());
             canvas.label(text, &menu::matched(text, &typed), label)?;
         }
         unsafe { target.EndDraw(None, None) }.map_err(win32("ID2D1RenderTarget::EndDraw"))?;

@@ -105,6 +105,14 @@ impl Row for Item {
         }
     }
 
+    fn alias(&self) -> Option<&str> {
+        match self {
+            Item::App(app, _) => app.alias(),
+            Item::Command(command) => command.alias(),
+            Item::Entry(entry, _) => entry.alias(),
+        }
+    }
+
     fn icon(&self) -> Option<Picture> {
         match self {
             Item::App(app, _) => app.icon(),

@@ -32,7 +32,8 @@ Picking one runs it at once, with no confirmation. Tab switches between apps and
 In GlazeWM, also add an `ignore` window rule for `window_process: { equals: 'carronade' }`.
 
 Matches hold the letters of every typed word in order, with gaps allowed, so `crnd` finds carronade. Words match in
-any order, ignoring case. Letters in a row and at word starts, including capitals inside a name like GlazeWM, rank
+any order, ignoring case. In apps, a word also matches the name of the exe an app starts, so `pwsh` finds PowerShell 7,
+a little below the same match in a name. Letters in a row and at word starts, including capitals inside a name like GlazeWM, rank
 higher, and so do matches in the file name over the folders. Apps and entries you open often or lately rank higher
 too, by a bonus that grows with use but never lifts a poor match over a good one, and with nothing typed they come
 first. Ties keep list order: by name in apps and shallowest first in files. The letters matched are drawn in

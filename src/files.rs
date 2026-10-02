@@ -23,6 +23,10 @@ impl Row for Entry {
         &self.label
     }
 
+    fn alias(&self) -> Option<&str> {
+        None
+    }
+
     fn icon(&self) -> Option<Picture> {
         Some(Picture::Shell(self.path.clone()))
     }

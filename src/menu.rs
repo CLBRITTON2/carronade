@@ -11,28 +11,49 @@ pub enum Choice<T> {
     Cancel,
 }
 
-/// Indices of the items matching every whitespace-separated term of `query` (see `term`), ignoring case, best matches
-/// first. Each item's boost adds to its score, so with no query the boosts alone rank. Equal matches keep their input
-/// order, which callers use for depth.
-pub fn filter(items: &[String], boosts: &[i32], query: &str) -> Vec<usize> {
+/// What `filter` matches and ranks an item by.
+pub struct Candidate {
+    pub label: String,
+    /// Matched like the label but never drawn, such as an app's exe name.
+    pub alias: Option<String>,
+    /// Added to the score of the item's matches.
+    pub boost: i32,
+}
+
+/// Taken off a term's score in the alias, so the same match in the label ranks first.
+const ALIAS: i32 = 8;
+
+/// Indices of the items matching every whitespace-separated term of `query` (see `term`) in their label or alias,
+/// ignoring case, best matches first. A negated term must miss both. Each item's boost adds to its score, so with no
+/// query the boosts alone rank. Equal matches keep their input order, which callers use for depth.
+pub fn filter(items: &[Candidate], query: &str) -> Vec<usize> {
     let terms = terms(query);
     let mut ranked: Vec<(Reverse<i32>, usize)> = items
         .iter()
-        .zip(boosts)
         .enumerate()
-        .filter_map(|(index, (item, boost))| {
-            let letters = letters(item);
-            let fits: Option<Vec<Fit>> = terms.iter().map(|term| fit(&letters, term)).collect();
-            fits.map(|fits| {
-                (
-                    Reverse(boost + fits.iter().map(|fit| fit.score).sum::<i32>()),
-                    index,
-                )
-            })
-        })
+        .filter_map(|(index, item)| score(item, &terms).map(|score| (Reverse(score), index)))
         .collect();
     ranked.sort_by_key(|&(rank, _)| rank);
     ranked.into_iter().map(|(_, index)| index).collect()
+}
+
+/// `item`'s rank in `filter`, or `None` when a term rules it out.
+fn score(item: &Candidate, terms: &[Term]) -> Option<i32> {
+    let label = letters(&item.label);
+    let alias = item.alias.as_deref().map(letters);
+    let scores: Option<i32> = terms
+        .iter()
+        .map(|term| {
+            let in_label = fit(&label, term).map(|fit| fit.score);
+            let in_alias = alias.as_deref().map(|alias| fit(alias, term));
+            match (term.negated, in_alias) {
+                (_, None) => in_label,
+                (true, Some(in_alias)) => in_alias.and(in_label),
+                (false, Some(in_alias)) => in_label.max(in_alias.map(|fit| fit.score - ALIAS)),
+            }
+        })
+        .sum();
+    scores.map(|score| score + item.boost)
 }
 
 /// The char positions in `item` of the letters the terms of `query` matched in `filter`, ascending.
@@ -457,31 +478,56 @@ impl Line {
 mod tests {
     use super::*;
 
-    fn items(lines: &[&str]) -> Vec<String> {
-        lines.iter().map(|line| (*line).to_owned()).collect()
+    fn candidate(label: &str, alias: Option<&str>, boost: i32) -> Candidate {
+        Candidate {
+            label: label.to_owned(),
+            alias: alias.map(str::to_owned),
+            boost,
+        }
     }
 
-    fn unboosted(items: &[String], query: &str) -> Vec<usize> {
-        filter(items, &vec![0; items.len()], query)
+    fn items(labels: &[&str]) -> Vec<Candidate> {
+        labels
+            .iter()
+            .map(|label| candidate(label, None, 0))
+            .collect()
     }
 
     #[test]
     fn empty_query_keeps_every_item() {
-        assert_eq!(unboosted(&items(&["a", "b"]), "  "), [0, 1]);
+        assert_eq!(filter(&items(&["a", "b"]), "  "), [0, 1]);
     }
 
     #[test]
     fn a_boost_ranks_the_empty_query_and_lifts_a_slightly_worse_match() {
-        let apps = items(&["Notepad", "Paint", "Snipping Tool"]);
-        assert_eq!(filter(&apps, &[0, 16, 4], ""), [1, 2, 0]);
-        assert_eq!(unboosted(&apps, "pa"), [1, 0]);
-        assert_eq!(filter(&apps, &[16, 0, 0], "pa"), [0, 1]);
+        let boosted = |boosts: [i32; 3]| {
+            let labels = ["Notepad", "Paint", "Snipping Tool"];
+            let pairs = labels.into_iter().zip(boosts);
+            pairs
+                .map(|(label, boost)| candidate(label, None, boost))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(filter(&boosted([0, 16, 4]), ""), [1, 2, 0]);
+        assert_eq!(filter(&boosted([0, 0, 0]), "pa"), [1, 0]);
+        assert_eq!(filter(&boosted([16, 0, 0]), "pa"), [0, 1]);
+    }
+
+    #[test]
+    fn an_alias_matches_below_the_same_match_in_a_label() {
+        let apps = [
+            candidate("PowerShell 7 (x64)", Some("pwsh"), 0),
+            candidate("Windows PowerShell", Some("powershell"), 0),
+            candidate("pwsh notes", None, 0),
+        ];
+        assert_eq!(filter(&apps, "pwsh"), [2, 0, 1]);
+        assert_eq!(filter(&apps, "pwsh 7"), [0]);
+        assert_eq!(filter(&apps, "shell !pwsh"), [1]);
     }
 
     #[test]
     fn filter_ignores_case() {
         assert_eq!(
-            unboosted(&items(&["Visual Studio Code", "Notepad"]), "code"),
+            filter(&items(&["Visual Studio Code", "Notepad"]), "code"),
             [0]
         );
     }
@@ -489,19 +535,19 @@ mod tests {
     #[test]
     fn filter_needs_every_word_in_any_order() {
         let apps = items(&["Windows Terminal", "Terminal Preview", "Windows Security"]);
-        assert_eq!(unboosted(&apps, "term win"), [0]);
+        assert_eq!(filter(&apps, "term win"), [0]);
     }
 
     #[test]
     fn equal_matches_keep_input_order() {
-        assert_eq!(unboosted(&items(&["zeta", "alpha", "beta"]), "eta"), [0, 2]);
+        assert_eq!(filter(&items(&["zeta", "alpha", "beta"]), "eta"), [0, 2]);
     }
 
     #[test]
     fn a_word_start_beats_a_match_mid_word() {
         let apps = items(&["Notepad", "Paint", "Snipping Tool"]);
-        assert_eq!(unboosted(&apps, "pa"), [1, 0]);
-        assert_eq!(unboosted(&apps, "t"), [2, 0, 1]);
+        assert_eq!(filter(&apps, "pa"), [1, 0]);
+        assert_eq!(filter(&apps, "t"), [2, 0, 1]);
     }
 
     #[test]
@@ -512,33 +558,33 @@ mod tests {
             "zet\\tests\\integration\\run.ps1",
             "zet\\prune.go",
         ]);
-        assert_eq!(unboosted(&entries, "run"), [2, 0, 3]);
-        assert_eq!(unboosted(&entries, "integ run"), [2]);
+        assert_eq!(filter(&entries, "run"), [2, 0, 3]);
+        assert_eq!(filter(&entries, "integ run"), [2]);
     }
 
     #[test]
     fn letters_match_in_order_with_gaps() {
         let apps = items(&["carronade", "nordic"]);
-        assert_eq!(unboosted(&apps, "crnd"), [0]);
-        assert_eq!(unboosted(&apps, "dnrc"), Vec::<usize>::new());
+        assert_eq!(filter(&apps, "crnd"), [0]);
+        assert_eq!(filter(&apps, "dnrc"), Vec::<usize>::new());
     }
 
     #[test]
     fn a_tight_match_beats_scattered_letters() {
         let apps = items(&["Network Tools Extra", "Notepad"]);
-        assert_eq!(unboosted(&apps, "note"), [1, 0]);
+        assert_eq!(filter(&apps, "note"), [1, 0]);
     }
 
     #[test]
     fn a_capital_after_a_lowercase_starts_a_word() {
         let apps = items(&["Snowman", "SnowMan"]);
-        assert_eq!(unboosted(&apps, "m"), [1, 0]);
+        assert_eq!(filter(&apps, "m"), [1, 0]);
     }
 
     #[test]
     fn every_word_adds_to_the_rank() {
         let entries = items(&["src\\domain.rs", "src\\main.rs"]);
-        assert_eq!(unboosted(&entries, "src main"), [1, 0]);
+        assert_eq!(filter(&entries, "src main"), [1, 0]);
     }
 
     #[test]
@@ -552,29 +598,29 @@ mod tests {
     #[test]
     fn a_quote_matches_the_letters_in_a_row() {
         let apps = items(&["carronade", "rotation"]);
-        assert_eq!(unboosted(&apps, "ron"), [1, 0]);
-        assert_eq!(unboosted(&apps, "'ron"), [0]);
+        assert_eq!(filter(&apps, "ron"), [1, 0]);
+        assert_eq!(filter(&apps, "'ron"), [0]);
     }
 
     #[test]
     fn a_caret_and_a_dollar_anchor_to_the_ends() {
         let entries = items(&["main.rs", "domain.rs", "main.rsx", "main"]);
-        assert_eq!(unboosted(&entries, "^ma"), [0, 2, 3]);
-        assert_eq!(unboosted(&entries, ".rs$"), [0, 1]);
-        assert_eq!(unboosted(&entries, "^main$"), [3]);
+        assert_eq!(filter(&entries, "^ma"), [0, 2, 3]);
+        assert_eq!(filter(&entries, ".rs$"), [0, 1]);
+        assert_eq!(filter(&entries, "^main$"), [3]);
     }
 
     #[test]
     fn a_bang_drops_the_items_holding_the_word() {
         let entries = items(&["main.rs", "main.go", "go.mod"]);
-        assert_eq!(unboosted(&entries, "main !.go"), [0]);
-        assert_eq!(unboosted(&entries, "!^go"), [0, 1]);
+        assert_eq!(filter(&entries, "main !.go"), [0]);
+        assert_eq!(filter(&entries, "!^go"), [0, 1]);
     }
 
     #[test]
     fn operators_alone_match_everything() {
         let entries = items(&["main.rs", "main.go"]);
-        assert_eq!(unboosted(&entries, "! ^ ' $"), [0, 1]);
+        assert_eq!(filter(&entries, "! ^ ' $"), [0, 1]);
     }
 
     #[test]
