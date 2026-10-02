@@ -58,8 +58,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
     GetMessageW, IDC_ARROW, LoadCursorW, MSG, PostMessageW, RegisterClassW, SW_SHOW,
     SetForegroundWindow, ShowWindow, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow, WA_INACTIVE,
-    WM_ACTIVATE, WM_APP, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_ACTIVATE, WM_APP, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WNDCLASSW,
+    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 use windows_numerics::Matrix3x2;
@@ -123,6 +123,8 @@ struct State {
     switch: Option<String>,
     /// A typed high surrogate whose low half has not arrived yet.
     surrogate: Option<u16>,
+    /// Where the last mouse move put the pointer, in client coordinates.
+    pointer: Option<(i16, i16)>,
     canvas: Canvas,
 }
 
@@ -387,6 +389,7 @@ fn open(
         line: Line::default(),
         switch,
         surrogate: None,
+        pointer: None,
         canvas: Canvas {
             window,
             origin,
@@ -577,11 +580,11 @@ extern "system" fn window_proc(
             handled => handled.map(|_| ()),
         },
         WM_CHAR => typed(wparam.0 as u16),
-        // The low and high words are signed client coordinates.
-        WM_LBUTTONDOWN => clicked(
-            f32::from(lparam.0 as i16),
-            f32::from((lparam.0 >> 16) as i16),
-        ),
+        WM_LBUTTONDOWN => {
+            let (x, y) = client(lparam);
+            clicked(f32::from(x), f32::from(y))
+        }
+        WM_MOUSEMOVE => hovered(client(lparam)),
         WM_ACTIVATE if (wparam.0 & 0xffff) as u32 == WA_INACTIVE => {
             finish(Ok(Action::Pick(Choice::Cancel)))
         }
@@ -623,6 +626,13 @@ fn key(key: VIRTUAL_KEY) -> Result<bool, Error> {
         VK_BACK if ctrl => edit(Line::delete_word)?,
         VK_BACK => edit(Line::backspace)?,
         VK_DELETE => edit(Line::delete)?,
+        VK_LEFT if with(|state| state.line.before.is_empty())? => {
+            move_to(|state| menu::column_left(state.cursor, state.canvas.config.list.lines))?
+        }
+        VK_RIGHT if with(|state| state.line.after.is_empty())? => move_to(|state| {
+            let lines = state.canvas.config.list.lines;
+            menu::column_right(state.cursor, state.shown.len(), lines)
+        })?,
         VK_LEFT => edit(Line::left)?,
         VK_RIGHT => edit(Line::right)?,
         VK_HOME => edit(Line::home)?,
@@ -664,8 +674,42 @@ fn edit(change: impl FnOnce(&Line) -> Line) -> Result<(), Error> {
 }
 
 fn move_by(by: isize) -> Result<(), Error> {
-    with(|state| state.cursor = menu::step(state.cursor, state.shown.len(), by))?;
+    move_to(|state| menu::step(state.cursor, state.shown.len(), by))
+}
+
+fn move_to(cursor: impl FnOnce(&State) -> usize) -> Result<(), Error> {
+    with(|state| state.cursor = cursor(state))?;
     render()
+}
+
+/// The low and high words of a mouse message's `lparam`, its signed client coordinates.
+fn client(lparam: LPARAM) -> (i16, i16) {
+    (lparam.0 as i16, (lparam.0 >> 16) as i16)
+}
+
+/// Selects the match under the pointer. Windows also sends a move without one when the window appears under a
+/// resting pointer or redraws, so only a change from the last known position counts.
+fn hovered(at: (i16, i16)) -> Result<(), Error> {
+    let moved = with(|state| {
+        let last = state.pointer.replace(at);
+        if last.is_none_or(|last| last == at) {
+            return false;
+        }
+        let row = state
+            .canvas
+            .layout
+            .cell_at(f32::from(at.0), f32::from(at.1))
+            .map(|slot| menu::first(state.cursor, state.page()) + slot)
+            .filter(|&row| row < state.shown.len() && row != state.cursor);
+        if let Some(row) = row {
+            state.cursor = row;
+        }
+        row.is_some()
+    })?;
+    match moved {
+        true => render(),
+        false => Ok(()),
+    }
 }
 
 fn clicked(x: f32, y: f32) -> Result<(), Error> {

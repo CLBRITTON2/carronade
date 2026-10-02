@@ -8,6 +8,9 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 
 - Ctrl+Enter in files starts `files.terminal` in the selected folder, or in the folder of the selected file. The new
   `terminal` field in `[files]` is required.
+- Left with the caret at the start of the query, or Right at its end, moves the selection to the previous or next
+  column.
+- Moving the mouse over a match selects it.
 
 ## [0.1.0] - 2026-10-01
 

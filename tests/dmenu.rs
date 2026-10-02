@@ -7,7 +7,7 @@ use std::process::Stdio;
 use std::sync::PoisonError;
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_RETURN, VK_UP,
+    VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_RETURN, VK_RIGHT, VK_UP,
 };
 
 use common::{CONFIG, Exit, ONE_AT_A_TIME, Outcome, Picker, carronade};
@@ -77,6 +77,19 @@ fn up_from_the_top_wraps_to_the_last_item() -> Outcome {
     picker.press(VK_UP)?;
     picker.press(VK_RETURN)?;
     picked(&picker.exit()?, "gamma");
+    Ok(())
+}
+
+#[test]
+fn left_and_right_at_the_query_ends_move_across_columns() -> Outcome {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    // The shipped config shows one column of 8, so the next column starts the next page.
+    let picker = dmenu("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n")?;
+    for key in [VK_RIGHT, VK_RIGHT, VK_DOWN, VK_LEFT, VK_DOWN] {
+        picker.press(key)?;
+    }
+    picker.press(VK_RETURN)?;
+    picked(&picker.exit()?, "2");
     Ok(())
 }
 

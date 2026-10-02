@@ -56,6 +56,21 @@ pub fn step(cursor: usize, len: usize, by: isize) -> usize {
     }
 }
 
+/// The row beside `cursor` in the previous column of a grid filled down columns of `lines`, else `cursor`.
+pub fn column_left(cursor: usize, lines: NonZeroUsize) -> usize {
+    cursor.checked_sub(lines.get()).unwrap_or(cursor)
+}
+
+/// The row beside `cursor` in the next column of `len` rows filled down columns of `lines`, or that column's last row
+/// when it is shorter, else `cursor`.
+pub fn column_right(cursor: usize, len: usize, lines: NonZeroUsize) -> usize {
+    let last = len.saturating_sub(1);
+    match cursor / lines < last / lines {
+        true => (cursor + lines.get()).min(last),
+        false => cursor,
+    }
+}
+
 /// What Enter picks: the item under the cursor, else the typed query.
 pub fn accept(shown: &[usize], cursor: usize, query: &str) -> Choice<usize> {
     match shown.get(cursor) {
@@ -234,6 +249,21 @@ mod tests {
     #[test]
     fn step_in_empty_list_stays_at_zero() {
         assert_eq!(step(0, 0, 1), 0);
+    }
+
+    #[test]
+    fn columns_move_by_a_column_and_stop_at_the_ends() -> Result<(), &'static str> {
+        let lines = NonZeroUsize::new(3).ok_or("zero lines")?;
+        assert_eq!(
+            [0, 2, 3, 7].map(|cursor| column_left(cursor, lines)),
+            [0, 2, 0, 4]
+        );
+        assert_eq!(
+            [0, 1, 2, 3, 4].map(|cursor| column_right(cursor, 5, lines)),
+            [3, 4, 4, 3, 4]
+        );
+        assert_eq!(column_right(0, 0, lines), 0);
+        Ok(())
     }
 
     #[test]
