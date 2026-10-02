@@ -11,6 +11,8 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 - Left with the caret at the start of the query, or Right at its end, moves the selection to the previous or next
   column.
 - Moving the mouse over a match selects it.
+- drun lists Lock, Sign out, Hibernate, Restart and Shut down after the apps, with icons. Picking one runs it at
+  once.
 - The mouse wheel moves the selection a row per notch, stopping at either end of the list.
 
 ## [0.1.0] - 2026-10-01

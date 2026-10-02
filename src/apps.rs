@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, PCWSTR};
 
 use crate::error::{Error, win32};
-use crate::picker::Row;
+use crate::picker::{Picture, Row};
 use crate::store;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -40,8 +40,8 @@ impl Row for App {
         &self.name
     }
 
-    fn icon(&self) -> Option<String> {
-        Some(self.target())
+    fn icon(&self) -> Option<Picture> {
+        Some(Picture::Shell(self.target()))
     }
 }
 

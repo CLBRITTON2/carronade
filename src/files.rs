@@ -6,7 +6,7 @@ use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-use crate::picker::Row;
+use crate::picker::{Picture, Row};
 use crate::store;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -23,8 +23,8 @@ impl Row for Entry {
         &self.label
     }
 
-    fn icon(&self) -> Option<String> {
-        Some(self.path.clone())
+    fn icon(&self) -> Option<Picture> {
+        Some(Picture::Shell(self.path.clone()))
     }
 }
 

@@ -16,7 +16,8 @@ use carronade::error::Error;
 use carronade::files;
 use carronade::history;
 use carronade::menu::Choice;
-use carronade::picker::{Action, Row, Step, browse, pick};
+use carronade::picker::{Action, Picture, Row, Step, browse, pick};
+use carronade::system::{self, Command};
 use windows::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MessageBoxW};
 use windows::core::{HSTRING, w};
@@ -91,6 +92,7 @@ impl Kind {
 #[derive(Clone)]
 enum Item {
     App(App),
+    Command(Command),
     Entry(files::Entry),
 }
 
@@ -98,13 +100,15 @@ impl Row for Item {
     fn label(&self) -> &str {
         match self {
             Item::App(app) => app.label(),
+            Item::Command(command) => command.label(),
             Item::Entry(entry) => entry.label(),
         }
     }
 
-    fn icon(&self) -> Option<String> {
+    fn icon(&self) -> Option<Picture> {
         match self {
             Item::App(app) => app.icon(),
+            Item::Command(command) => command.icon(),
             Item::Entry(entry) => entry.icon(),
         }
     }
@@ -150,7 +154,8 @@ impl Found {
                     )?;
                     self.apps = Some(history::by_recent(found, &settings.recent));
                 }
-                self.apps.iter().flatten().cloned().map(Item::App).collect()
+                let apps = self.apps.iter().flatten().cloned().map(Item::App);
+                apps.chain(Command::ALL.map(Item::Command)).collect()
             }
             Kind::Files => {
                 if self.files.is_none() {
@@ -194,8 +199,8 @@ enum Picked {
     Terminal(files::Entry),
 }
 
-/// Opens the pick from apps and files, starting on `start`: launches an app, recording it as recent, opens a file or
-/// folder, starts the terminal in an entry's folder, or runs the typed text as the Run dialog would. Returns whether
+/// Opens the pick from apps and files, starting on `start`: launches an app, recording it as recent, runs a system
+/// command, opens a file or folder, starts the terminal in an entry's folder, or runs the typed text as the Run dialog would. Returns whether
 /// there was a pick.
 fn search(config: Config, start: Kind) -> Result<bool, Error> {
     let history_path = history::path()?;
@@ -225,13 +230,17 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
                 }
             }
             Action::Terminal(Item::Entry(entry)) => Step::Done(Picked::Terminal(entry)),
-            Action::Terminal(Item::App(_)) => Step::Stay,
+            Action::Terminal(Item::App(_) | Item::Command(_)) => Step::Stay,
         })
     })?;
     let picked = match choice {
         Picked::Open(Choice::Item(Item::App(app))) => {
             apps::launch(&app.target())?;
             history::save(&history_path, history::launched(&settings.recent, &app.id))?;
+            true
+        }
+        Picked::Open(Choice::Item(Item::Command(command))) => {
+            system::run(command)?;
             true
         }
         Picked::Open(Choice::Item(Item::Entry(entry))) => {

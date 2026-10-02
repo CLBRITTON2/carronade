@@ -72,10 +72,10 @@ use crate::menu::{self, Choice, Line};
 
 const CLASS: PCWSTR = w!("carronade");
 
-/// What the picker shows for an item: its label, and the shell target whose icon goes beside it.
+/// What the picker shows for an item: its label, and the picture beside it.
 pub trait Row {
     fn label(&self) -> &str;
-    fn icon(&self) -> Option<String>;
+    fn icon(&self) -> Option<Picture>;
 }
 
 impl Row for String {
@@ -83,10 +83,21 @@ impl Row for String {
         self
     }
 
-    fn icon(&self) -> Option<String> {
+    fn icon(&self) -> Option<Picture> {
         None
     }
 }
+
+/// What goes beside a row's label.
+pub enum Picture {
+    /// A shell target, shown with the icon the shell has for it.
+    Shell(String),
+    /// A glyph of `GLYPH_FONT`.
+    Glyph(char),
+}
+
+/// Installed with every Windows 10 and 11, Server included, unlike its successor Segoe Fluent Icons.
+const GLYPH_FONT: &str = "Segoe MDL2 Assets";
 
 /// What the person did in the picker.
 pub enum Action<T> {
@@ -111,6 +122,7 @@ pub enum Step<T, R> {
 enum Icon {
     Unloaded(String),
     Loaded(ID2D1Bitmap),
+    Glyph(char),
 }
 
 struct State {
@@ -143,6 +155,8 @@ struct Canvas {
     prompt: IDWriteTextFormat,
     /// The prompt font, centered for the switch icon.
     icon: IDWriteTextFormat,
+    /// `GLYPH_FONT`, centered in a row's icon box.
+    glyph: IDWriteTextFormat,
     image: Option<ID2D1BitmapBrush>,
     layout: Layout,
     config: Config,
@@ -219,7 +233,13 @@ fn steps<T: Row + Clone, R>(
 fn rows<T: Row>(items: &[T]) -> (Vec<String>, Vec<Option<Icon>>) {
     items
         .iter()
-        .map(|item| (item.label().to_owned(), item.icon().map(Icon::Unloaded)))
+        .map(|item| {
+            let icon = item.icon().map(|picture| match picture {
+                Picture::Shell(target) => Icon::Unloaded(target),
+                Picture::Glyph(glyph) => Icon::Glyph(glyph),
+            });
+            (item.label().to_owned(), icon)
+        })
         .unzip()
 }
 
@@ -277,6 +297,10 @@ fn open(
     let prompt = format(&dwrite, &config.input.prompt_font, em)?;
     let icon = format(&dwrite, &config.input.prompt_font, em)?;
     unsafe { icon.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) }
+        .map_err(win32("SetTextAlignment"))?;
+    // Its glyphs fill most of the em square, while shell icons leave a margin inside theirs.
+    let glyph = format(&dwrite, GLYPH_FONT, config.element.icon.px(em, scale) * 0.6)?;
+    unsafe { glyph.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) }
         .map_err(win32("SetTextAlignment"))?;
     let typed = measure(&dwrite, &text, &config.input.placeholder)?;
     let prompted = measure(&dwrite, &prompt, &config.input.prompt)?;
@@ -404,6 +428,7 @@ fn open(
             text,
             prompt,
             icon,
+            glyph,
             image,
             layout,
             config,
@@ -956,6 +981,11 @@ impl State {
                             None,
                         )
                     };
+                    cell.label
+                }
+                Some(Some(Icon::Glyph(glyph))) => {
+                    let glyph = glyph.to_string();
+                    canvas.text(&glyph, &canvas.glyph, cell.icon, element.color);
                     cell.label
                 }
                 _ => Rect {

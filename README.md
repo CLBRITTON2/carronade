@@ -24,7 +24,9 @@ carronade files
 carronade --config C:\path\to\config.toml drun
 ```
 
-Tab switches between drun and files and keeps the query. Bind `carronade drun` to a hotkey in your window manager.
+drun also lists Lock, Sign out, Hibernate, Restart and Shut down after the apps, each with a Segoe MDL2 Assets icon.
+Picking one runs it at once, with no confirmation. Tab switches between drun and files and keeps the query. Bind
+`carronade drun` to a hotkey in your window manager.
 In GlazeWM, also add an `ignore` window rule for `window_process: { equals: 'carronade' }`.
 
 Matches contain every typed word in any order, ignoring case. Name matches rank above folder matches, and word starts
