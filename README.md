@@ -11,6 +11,8 @@ cargo install --path .
 
 Copy [config.toml](config.toml) to `%APPDATA%\carronade\config.toml`. carronade does not start without it.
 
+Requires Windows 11 24H2 or later (an older Windows also opens a console window when a hotkey starts carronade).
+
 ## Usage
 
 ```powershell

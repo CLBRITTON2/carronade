@@ -3,9 +3,6 @@
 //! the same window. Each exits 1 on cancel and 2 on error. `--config <path>` replaces
 //! `%APPDATA%\carronade\config.toml`.
 
-// No console window flashes up when GlazeWM starts it. Piped stdin and stdout still reach it.
-#![windows_subsystem = "windows"]
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

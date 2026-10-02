@@ -11,6 +11,9 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
   the 1000 most recently loaded.
 - The Start menu mode is `carronade apps`, and its config section is `[apps]`. Rename `drun` in hotkey bindings and
   `[drun]` in `config.toml`, which otherwise fails to load.
+- `carronade dmenu` at the end of a PowerShell pipeline, or with its output assigned, opens the picker and returns
+  the line picked. PowerShell used to return at once and leave carronade waiting on its input with no window.
+  carronade now needs Windows 11 24H2 or later to start from a hotkey without a console window.
 
 ## [0.2.0] - 2026-10-02
 
