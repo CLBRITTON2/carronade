@@ -14,6 +14,8 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 - `carronade dmenu` at the end of a PowerShell pipeline, or with its output assigned, opens the picker and returns
   the line picked. PowerShell used to return at once and leave carronade waiting on its input with no window.
   carronade now needs Windows 11 24H2 or later to start from a hotkey without a console window.
+- Matching is fuzzy: a typed word matches when its letters appear in order, so `crnd` finds carronade. Letters in a
+  row, at word starts and in the file name rank higher.
 
 ## [0.2.0] - 2026-10-02
 

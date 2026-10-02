@@ -31,10 +31,10 @@ Picking one runs it at once, with no confirmation. Tab switches between apps and
 `carronade apps` to a hotkey in your window manager.
 In GlazeWM, also add an `ignore` window rule for `window_process: { equals: 'carronade' }`.
 
-Matches contain every typed word in any order, ignoring case. Name matches rank above folder matches, and word starts
-above matches inside a word. Ties keep list order: recent first, then the rest by name in apps and shallowest first in
-files. Enter with no
-match runs the typed text as the Run dialog would.
+Matches hold the letters of every typed word in order, with gaps allowed, so `crnd` finds carronade. Words match in
+any order, ignoring case. Letters in a row and at word starts, including capitals inside a name like GlazeWM, rank
+higher, and so do matches in the file name over the folders. Ties keep list order: recent first, then the rest by
+name in apps and shallowest first in files. Enter with no match runs the typed text as the Run dialog would.
 
 | Key | Action |
 | --- | --- |

@@ -1,5 +1,6 @@
 //! The picker's logic, free of any window.
 
+use std::cmp::Reverse;
 use std::num::NonZeroUsize;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -10,42 +11,117 @@ pub enum Choice<T> {
     Cancel,
 }
 
-/// Indices of the items that contain every whitespace-separated word of `query`, ignoring case, best matches first.
-/// Equal matches keep their input order, which callers use for recency or depth.
+/// Indices of the items holding the letters of every whitespace-separated word of `query` in order, gaps allowed,
+/// ignoring case, best matches first. Equal matches keep their input order, which callers use for recency or depth.
 pub fn filter(items: &[String], query: &str) -> Vec<usize> {
-    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    let mut ranked: Vec<(u32, usize)> = items
+    let words: Vec<Vec<char>> = query
+        .split_whitespace()
+        .map(|word| word.chars().map(lower).collect())
+        .collect();
+    let mut ranked: Vec<(Reverse<i32>, usize)> = items
         .iter()
         .enumerate()
         .filter_map(|(index, item)| {
-            let item = item.to_lowercase();
-            let tiers: Option<Vec<u32>> = words.iter().map(|word| tier(&item, word)).collect();
-            tiers.map(|tiers| (tiers.iter().sum(), index))
+            let letters = letters(item);
+            let scores: Option<Vec<i32>> = words.iter().map(|word| score(&letters, word)).collect();
+            scores.map(|scores| (Reverse(scores.iter().sum()), index))
         })
         .collect();
     ranked.sort_by_key(|&(rank, _)| rank);
     ranked.into_iter().map(|(_, index)| index).collect()
 }
 
-/// How well `word` matches lowercase `item` at its best occurrence, 0 best, or `None` when it does not occur. A match
-/// in the name, the part after the last path separator, beats one in the folders, and either beats itself mid-word.
-fn tier(item: &str, word: &str) -> Option<u32> {
+const MATCH: i32 = 16;
+/// Per matched letter at a word start: the item's start, after a non-alphanumeric, or a capital after a lowercase.
+const BOUNDARY: i32 = 8;
+/// Per matched letter in the name, the part after the last path separator, so name matches beat folder matches.
+const NAME: i32 = 8;
+const CONSECUTIVE: i32 = 4;
+const GAP_START: i32 = 3;
+const GAP_EXTENSION: i32 = 1;
+
+/// One letter of an item, lowercase, with the bonuses a match on it earns.
+#[derive(Clone, Copy)]
+struct Letter {
+    letter: char,
+    boundary: i32,
+    name: i32,
+}
+
+fn letters(item: &str) -> Vec<Letter> {
     let name = item.rfind(['\\', '/']).map_or(0, |separator| separator + 1);
-    item.match_indices(word)
-        .map(|(at, _)| {
-            let in_name = at >= name;
-            let word_start = item
-                .get(..at)
-                .and_then(|before| before.chars().next_back())
-                .is_none_or(|previous| !previous.is_alphanumeric());
-            match (in_name, word_start) {
-                (true, true) => 0,
-                (true, false) => 1,
-                (false, true) => 2,
-                (false, false) => 3,
+    let mut previous: Option<char> = None;
+    item.char_indices()
+        .map(|(at, letter)| {
+            let boundary = previous.is_none_or(|previous| {
+                !previous.is_alphanumeric() || (previous.is_lowercase() && letter.is_uppercase())
+            });
+            previous = Some(letter);
+            Letter {
+                letter: lower(letter),
+                boundary: if boundary { BOUNDARY } else { 0 },
+                name: if at >= name { NAME } else { 0 },
             }
         })
-        .min()
+        .collect()
+}
+
+/// The first char of `letter`'s lowercase, so item and query letters line up one to one.
+fn lower(letter: char) -> char {
+    letter.to_lowercase().next().unwrap_or(letter)
+}
+
+/// The best way found to match a word so far with its last letter at one position.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Cell {
+    score: i32,
+    /// The boundary bonus of the first letter of this run of consecutive matches, which every letter of the run earns,
+    /// so `src` matched whole at a word start beats its letters scattered over other word starts.
+    run: i32,
+}
+
+/// The best score of `word`'s letters matched in order in `letters`, or `None` when they do not all occur. Each row
+/// holds, per position, the best match of the word so far with its last letter there.
+fn score(letters: &[Letter], word: &[char]) -> Option<i32> {
+    let (first, rest) = word.split_first()?;
+    let mut row: Vec<Option<Cell>> = letters
+        .iter()
+        .map(|letter| {
+            (letter.letter == *first).then_some(Cell {
+                score: MATCH + letter.boundary + letter.name,
+                run: letter.boundary,
+            })
+        })
+        .collect();
+    for wanted in rest {
+        // The best score that reaches this position across a gap of at least one letter.
+        let mut gapped: Option<i32> = None;
+        let mut before: Option<Cell> = None;
+        row = letters
+            .iter()
+            .zip(&row)
+            .map(|(letter, &here)| {
+                let extended = before.map(|cell| {
+                    let run = cell.run.max(letter.boundary);
+                    Cell {
+                        score: cell.score + MATCH + CONSECUTIVE + run + letter.name,
+                        run,
+                    }
+                });
+                let jumped = gapped.map(|score| Cell {
+                    score: score + MATCH + letter.boundary + letter.name,
+                    run: letter.boundary,
+                });
+                let cell = extended.max(jumped).filter(|_| letter.letter == *wanted);
+                gapped = gapped
+                    .map(|score| score - GAP_EXTENSION)
+                    .max(before.map(|cell| cell.score - GAP_START));
+                before = here;
+                cell
+            })
+            .collect();
+    }
+    row.into_iter().flatten().map(|cell| cell.score).max()
 }
 
 /// The row `by` rows from `cursor`, wrapping at both ends of `len` rows.
@@ -248,15 +324,34 @@ mod tests {
     }
 
     #[test]
-    fn a_match_in_the_name_beats_one_in_the_folders() {
+    fn a_word_start_in_the_name_beats_one_in_the_folders_and_both_beat_one_mid_word() {
         let entries = items(&[
             "run\\notes.md",
             "zet\\tests\\integration\\main.go",
             "zet\\tests\\integration\\run.ps1",
             "zet\\prune.go",
         ]);
-        assert_eq!(filter(&entries, "run"), [2, 3, 0]);
+        assert_eq!(filter(&entries, "run"), [2, 0, 3]);
         assert_eq!(filter(&entries, "integ run"), [2]);
+    }
+
+    #[test]
+    fn letters_match_in_order_with_gaps() {
+        let apps = items(&["carronade", "nordic"]);
+        assert_eq!(filter(&apps, "crnd"), [0]);
+        assert_eq!(filter(&apps, "dnrc"), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_tight_match_beats_scattered_letters() {
+        let apps = items(&["Network Tools Extra", "Notepad"]);
+        assert_eq!(filter(&apps, "note"), [1, 0]);
+    }
+
+    #[test]
+    fn a_capital_after_a_lowercase_starts_a_word() {
+        let apps = items(&["Snowman", "SnowMan"]);
+        assert_eq!(filter(&apps, "m"), [1, 0]);
     }
 
     #[test]
