@@ -108,6 +108,8 @@ pub struct Files {
     pub roots: Vec<PathBuf>,
     /// Opens on the entries found last time and lists them again after the picker closes.
     pub cache: bool,
+    /// Started as the Run dialog would by Ctrl+Enter, in the selected folder or the folder of the selected file.
+    pub terminal: String,
 }
 
 /// `"8px"`, scaled with the monitor's DPI, or `"1.5em"`, a multiple of the font size.

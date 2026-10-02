@@ -97,18 +97,35 @@ pub fn save(path: &Path, apps: &[App]) -> Result<(), Error> {
 /// Opens `target` as the Run dialog would: an `App::target`, a program on PATH, a path or a URL.
 pub fn launch(target: &str) -> Result<(), Error> {
     com()?;
+    shell_execute(target, PCWSTR::null()).map_err(|source| Error::Launch {
+        target: target.to_owned(),
+        source,
+    })
+}
+
+/// Starts `program` as the Run dialog would, with `folder` as its working folder.
+pub fn launch_in(program: &str, folder: &Path) -> Result<(), Error> {
+    com()?;
+    let directory = HSTRING::from(folder);
+    shell_execute(program, PCWSTR(directory.as_ptr())).map_err(|source| Error::LaunchIn {
+        program: program.to_owned(),
+        folder: folder.to_owned(),
+        source,
+    })
+}
+
+/// Needs `com` first. `directory` is null for the caller's working folder.
+fn shell_execute(target: &str, directory: PCWSTR) -> Result<(), windows::core::Error> {
     let file: Vec<u16> = target.encode_utf16().chain([0]).collect();
     let mut info = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_FLAG_NO_UI,
         lpFile: PCWSTR(file.as_ptr()),
+        lpDirectory: directory,
         nShow: SW_SHOWNORMAL.0,
         ..Default::default()
     };
-    unsafe { ShellExecuteExW(&mut info) }.map_err(|source| Error::Launch {
-        target: target.to_owned(),
-        source,
-    })
+    unsafe { ShellExecuteExW(&mut info) }
 }
 
 /// The icon the shell shows for `target`, at most `size` px square, as a 32-bit bitmap with premultiplied alpha.

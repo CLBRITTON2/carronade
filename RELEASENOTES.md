@@ -1,7 +1,13 @@
 # Release notes
 
 Each release has a `## [<version>] - <date>` section, newest first. `scripts/release.ps1` publishes the section for
-the tagged version as its GitHub release notes, and refuses to release a version without one.
+the tagged version as its GitHub release notes, and refuses to release a version without one. Changes since the last
+release go under `## [Unreleased]`, renamed to the version when it is tagged.
+
+## [Unreleased]
+
+- Ctrl+Enter in files starts `files.terminal` in the selected folder, or in the folder of the selected file. The new
+  `terminal` field in `[files]` is required.
 
 ## [0.1.0] - 2026-10-01
 

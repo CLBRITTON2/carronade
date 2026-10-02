@@ -39,6 +39,23 @@ pub fn list(roots: &[PathBuf]) -> Result<Vec<Entry>, Error> {
     Ok(entries)
 }
 
+/// `path` when it is a folder, else the folder holding it.
+pub fn folder(path: &Path) -> Result<PathBuf, Error> {
+    let metadata = std::fs::metadata(path).map_err(|source| Error::Attributes {
+        path: path.to_owned(),
+        source,
+    })?;
+    match metadata.is_dir() {
+        true => Ok(path.to_owned()),
+        false => path
+            .parent()
+            .map(Path::to_owned)
+            .ok_or_else(|| Error::NoParent {
+                path: path.to_owned(),
+            }),
+    }
+}
+
 /// TOML needs a table at the top, so the entries sit in an `[[entry]]` array.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

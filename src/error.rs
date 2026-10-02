@@ -42,6 +42,21 @@ pub enum Error {
         #[source]
         source: windows::core::Error,
     },
+    #[error("launching {program:?} in {folder:?} failed: {source}")]
+    LaunchIn {
+        program: String,
+        folder: PathBuf,
+        #[source]
+        source: windows::core::Error,
+    },
+    #[error("reading the attributes of {path:?} failed: {source}")]
+    Attributes {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{path:?} is a file with no folder above it")]
+    NoParent { path: PathBuf },
     #[error("loading the icon of {target:?} failed: {source}")]
     Icon {
         target: String,

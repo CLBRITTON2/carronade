@@ -201,6 +201,7 @@ mod tests {
         [files]
         roots = []
         cache = false
+        terminal = "pwsh"
     "##;
 
     fn layout(scale: f32) -> Result<Layout, toml::de::Error> {

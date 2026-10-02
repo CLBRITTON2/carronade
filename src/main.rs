@@ -115,6 +115,7 @@ struct Settings {
     drun_cache: bool,
     files_cache: bool,
     roots: Vec<PathBuf>,
+    terminal: String,
     apps_icon: String,
     files_icon: String,
     recent: Vec<String>,
@@ -186,14 +187,23 @@ fn cached<T>(
     last.map_or_else(list, Ok)
 }
 
+/// What a search ends with.
+enum Picked {
+    Open(Choice<Item>),
+    /// Ctrl+Enter on a file or folder.
+    Terminal(files::Entry),
+}
+
 /// Opens the pick from apps and files, starting on `start`: launches an app, recording it as recent, opens a file or
-/// folder, or runs the typed text as the Run dialog would. Returns whether there was a pick.
+/// folder, starts the terminal in an entry's folder, or runs the typed text as the Run dialog would. Returns whether
+/// there was a pick.
 fn search(config: Config, start: Kind) -> Result<bool, Error> {
     let history_path = history::path()?;
     let settings = Settings {
         drun_cache: config.drun.cache,
         files_cache: config.files.cache,
         roots: config.files.roots.clone(),
+        terminal: config.files.terminal.clone(),
         apps_icon: config.input.apps_icon.clone(),
         files_icon: config.input.files_icon.clone(),
         recent: history::load(&history_path)?,
@@ -206,7 +216,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
     let first = found.items(kind, &settings)?;
     let choice = browse(config, first, Some(settings.switch(kind)), |action| {
         Ok(match action {
-            Action::Pick(choice) => Step::Done(choice),
+            Action::Pick(choice) => Step::Done(Picked::Open(choice)),
             Action::Switch => {
                 kind = kind.other();
                 Step::Show {
@@ -214,23 +224,29 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
                     switch: settings.switch(kind),
                 }
             }
+            Action::Terminal(Item::Entry(entry)) => Step::Done(Picked::Terminal(entry)),
+            Action::Terminal(Item::App(_)) => Step::Stay,
         })
     })?;
     let picked = match choice {
-        Choice::Item(Item::App(app)) => {
+        Picked::Open(Choice::Item(Item::App(app))) => {
             apps::launch(&app.target())?;
             history::save(&history_path, history::launched(&settings.recent, &app.id))?;
             true
         }
-        Choice::Item(Item::Entry(entry)) => {
+        Picked::Open(Choice::Item(Item::Entry(entry))) => {
             apps::launch(&entry.path)?;
             true
         }
-        Choice::Text(text) => {
+        Picked::Open(Choice::Text(text)) => {
             apps::launch(&text)?;
             true
         }
-        Choice::Cancel => false,
+        Picked::Open(Choice::Cancel) => false,
+        Picked::Terminal(entry) => {
+            apps::launch_in(&settings.terminal, &files::folder(Path::new(&entry.path))?)?;
+            true
+        }
     };
     // After the picker closes, since listing beside it slowed its startup by tens of ms.
     if settings.drun_cache && found.apps.is_some() {

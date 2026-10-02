@@ -35,6 +35,7 @@ match runs the typed text as the Run dialog would.
 | --- | --- |
 | Enter | pick the selection, or the typed text when nothing matches |
 | Shift+Enter | pick the typed text |
+| Ctrl+Enter | in files, start `files.terminal` in the selected folder or the selected file's folder |
 | Tab | switch between drun and files |
 | Up, Down, Ctrl+P, Ctrl+N | move the selection |
 | Esc | cancel |

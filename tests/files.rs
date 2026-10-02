@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
 
 use carronade::error::Error as CarronadeError;
-use carronade::files;
+use carronade::{apps, files};
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, SetFileAttributesW};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_TAB};
 use windows::core::HSTRING;
@@ -85,6 +85,36 @@ fn a_missing_root_is_named_in_the_error() -> Outcome {
     let result = files::list(std::slice::from_ref(&missing));
     assert!(
         matches!(&result, Err(CarronadeError::Walk { root, .. }) if *root == missing),
+        "got {result:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_folder_of_a_file_is_the_one_holding_it() -> Outcome {
+    let root = fixture("files-folder", &["zet/README.md"])?;
+    let zet = root.join("zet");
+    assert_eq!(files::folder(&zet.join("README.md"))?, zet);
+    assert_eq!(files::folder(&zet)?, zet);
+    let missing = zet.join("missing.md");
+    let result = files::folder(&missing);
+    assert!(
+        matches!(&result, Err(CarronadeError::Attributes { path, .. }) if *path == missing),
+        "got {result:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_failed_terminal_names_its_program_and_folder() -> Outcome {
+    // An empty exe fails to start with no window, whatever the machine's file associations.
+    let root = fixture("files-terminal", &["terminal.exe"])?;
+    let program = root.join("terminal.exe");
+    let program = program.to_str().ok_or("path is not Unicode")?;
+    let result = apps::launch_in(program, &root);
+    assert!(
+        matches!(&result, Err(CarronadeError::LaunchIn { program: failed, folder, .. })
+            if failed == program && *folder == root),
         "got {result:?}"
     );
     Ok(())

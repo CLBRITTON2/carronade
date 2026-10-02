@@ -93,11 +93,13 @@ pub enum Action<T> {
     Pick(Choice<T>),
     /// Tab or a click on the switch icon.
     Switch,
+    /// Ctrl+Enter on a match.
+    Terminal(T),
 }
 
 /// What `browse` does after an `Action`.
-pub enum Step<T> {
-    Done(Choice<T>),
+pub enum Step<T, R> {
+    Done(R),
     /// Replaces the items and the switch icon in the same window, filtered by the query typed so far.
     Show {
         items: Vec<T>,
@@ -155,19 +157,19 @@ pub fn pick<T: Row + Clone>(config: Config, items: Vec<T>) -> Result<Choice<T>, 
     browse(config, items, None, |action| {
         Ok(match action {
             Action::Pick(choice) => Step::Done(choice),
-            Action::Switch => Step::Stay,
+            Action::Switch | Action::Terminal(_) => Step::Stay,
         })
     })
 }
 
 /// Shows `items` under an input bar, with the `switch` glyph at its right end when there is one, asking `next` what
 /// each action leads to until it is done. Call it once per process: it registers the window class.
-pub fn browse<T: Row + Clone>(
+pub fn browse<T: Row + Clone, R>(
     config: Config,
     items: Vec<T>,
     switch: Option<String>,
-    next: impl FnMut(Action<T>) -> Result<Step<T>, Error>,
-) -> Result<Choice<T>, Error> {
+    next: impl FnMut(Action<T>) -> Result<Step<T, R>, Error>,
+) -> Result<R, Error> {
     let (labels, icons) = rows(&items);
     let window = open(config, labels, icons, switch)?;
     let choice = steps(items, next);
@@ -177,21 +179,22 @@ pub fn browse<T: Row + Clone>(
     choice
 }
 
-fn steps<T: Row + Clone>(
+fn steps<T: Row + Clone, R>(
     items: Vec<T>,
-    mut next: impl FnMut(Action<T>) -> Result<Step<T>, Error>,
-) -> Result<Choice<T>, Error> {
+    mut next: impl FnMut(Action<T>) -> Result<Step<T, R>, Error>,
+) -> Result<R, Error> {
     let mut items = items;
     loop {
+        let item = |row: usize| {
+            let len = items.len();
+            items.get(row).cloned().ok_or(Error::Row { row, len })
+        };
         let action = match pump()? {
-            Action::Pick(Choice::Item(row)) => {
-                let len = items.len();
-                let item = items.get(row).cloned().ok_or(Error::Row { row, len })?;
-                Action::Pick(Choice::Item(item))
-            }
+            Action::Pick(Choice::Item(row)) => Action::Pick(Choice::Item(item(row)?)),
             Action::Pick(Choice::Text(text)) => Action::Pick(Choice::Text(text)),
             Action::Pick(Choice::Cancel) => Action::Pick(Choice::Cancel),
             Action::Switch => Action::Switch,
+            Action::Terminal(row) => Action::Terminal(item(row)?),
         };
         match next(action)? {
             Step::Done(choice) => return Ok(choice),
@@ -596,6 +599,11 @@ fn key(key: VIRTUAL_KEY) -> Result<bool, Error> {
     let ctrl = held(VK_CONTROL);
     match key {
         VK_ESCAPE => finish(Ok(Action::Pick(Choice::Cancel)))?,
+        VK_RETURN if ctrl => {
+            if let Some(row) = with(|state| state.shown.get(state.cursor).copied())? {
+                finish(Ok(Action::Terminal(row)))?;
+            }
+        }
         VK_RETURN => {
             let shift = held(VK_SHIFT);
             let choice = with(|state| {
