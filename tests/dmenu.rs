@@ -94,6 +94,18 @@ fn left_and_right_at_the_query_ends_move_across_columns() -> Outcome {
 }
 
 #[test]
+fn the_wheel_moves_a_row_per_notch_and_stops_at_the_ends() -> Outcome {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let picker = dmenu("alpha\nbeta\ngamma\n")?;
+    for delta in [120, 120, -60, -60, -120, -360, 120] {
+        picker.scroll(delta)?;
+    }
+    picker.press(VK_RETURN)?;
+    picked(&picker.exit()?, "beta");
+    Ok(())
+}
+
+#[test]
 fn typing_resets_the_cursor_to_the_first_match() -> Outcome {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let picker = dmenu("alpha\nbeta\ngamma\n")?;

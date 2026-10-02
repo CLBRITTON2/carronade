@@ -58,8 +58,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
     GetMessageW, IDC_ARROW, LoadCursorW, MSG, PostMessageW, RegisterClassW, SW_SHOW,
     SetForegroundWindow, ShowWindow, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow, WA_INACTIVE,
-    WM_ACTIVATE, WM_APP, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WNDCLASSW,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_ACTIVATE, WM_APP, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 use windows_numerics::Matrix3x2;
@@ -125,6 +125,8 @@ struct State {
     surrogate: Option<u16>,
     /// Where the last mouse move put the pointer, in client coordinates.
     pointer: Option<(i16, i16)>,
+    /// The part of a wheel notch turned so far.
+    wheel: i32,
     canvas: Canvas,
 }
 
@@ -390,6 +392,7 @@ fn open(
         switch,
         surrogate: None,
         pointer: None,
+        wheel: 0,
         canvas: Canvas {
             window,
             origin,
@@ -585,6 +588,8 @@ extern "system" fn window_proc(
             clicked(f32::from(x), f32::from(y))
         }
         WM_MOUSEMOVE => hovered(client(lparam)),
+        // The high word is the signed turn.
+        WM_MOUSEWHEEL => scrolled((wparam.0 >> 16) as i16),
         WM_ACTIVATE if (wparam.0 & 0xffff) as u32 == WA_INACTIVE => {
             finish(Ok(Action::Pick(Choice::Cancel)))
         }
@@ -679,6 +684,15 @@ fn move_by(by: isize) -> Result<(), Error> {
 
 fn move_to(cursor: impl FnOnce(&State) -> usize) -> Result<(), Error> {
     with(|state| state.cursor = cursor(state))?;
+    render()
+}
+
+fn scrolled(delta: i16) -> Result<(), Error> {
+    with(|state| {
+        let scroll = menu::scroll(state.wheel, i32::from(delta));
+        state.wheel = scroll.pending;
+        state.cursor = menu::clamped(state.cursor, state.shown.len(), scroll.rows);
+    })?;
     render()
 }
 

@@ -56,6 +56,32 @@ pub fn step(cursor: usize, len: usize, by: isize) -> usize {
     }
 }
 
+/// The row `by` rows from `cursor`, stopping at both ends of `len` rows.
+pub fn clamped(cursor: usize, len: usize, by: isize) -> usize {
+    cursor.saturating_add_signed(by).min(len.saturating_sub(1))
+}
+
+/// One notch of a mouse wheel, `WHEEL_DELTA` in Win32.
+const NOTCH: i32 = 120;
+
+/// What a wheel turn does to the selection.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Scroll {
+    /// Positive moves down the list.
+    pub rows: isize,
+    /// The part of a notch left over, added to the next turn: touchpads send fractions of a notch.
+    pub pending: i32,
+}
+
+/// A wheel turn of `delta`, positive away from the person, on top of the `pending` part of a notch.
+pub fn scroll(pending: i32, delta: i32) -> Scroll {
+    let total = pending.saturating_add(delta);
+    Scroll {
+        rows: -(total / NOTCH) as isize,
+        pending: total % NOTCH,
+    }
+}
+
 /// The row beside `cursor` in the previous column of a grid filled down columns of `lines`, else `cursor`.
 pub fn column_left(cursor: usize, lines: NonZeroUsize) -> usize {
     cursor.checked_sub(lines.get()).unwrap_or(cursor)
@@ -249,6 +275,24 @@ mod tests {
     #[test]
     fn step_in_empty_list_stays_at_zero() {
         assert_eq!(step(0, 0, 1), 0);
+    }
+
+    #[test]
+    fn clamped_stops_at_both_ends() {
+        assert_eq!(clamped(1, 3, 5), 2);
+        assert_eq!(clamped(1, 3, -5), 0);
+        assert_eq!(clamped(0, 3, 1), 1);
+        assert_eq!(clamped(0, 0, 1), 0);
+    }
+
+    #[test]
+    fn a_wheel_moves_a_row_per_notch_and_keeps_the_rest() {
+        let turn = |rows, pending| Scroll { rows, pending };
+        assert_eq!(scroll(0, 120), turn(-1, 0));
+        assert_eq!(scroll(0, -240), turn(2, 0));
+        assert_eq!(scroll(0, 40), turn(0, 40));
+        assert_eq!(scroll(80, 40), turn(-1, 0));
+        assert_eq!(scroll(0, -130), turn(1, -10));
     }
 
     #[test]

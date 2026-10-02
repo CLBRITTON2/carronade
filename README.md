@@ -41,7 +41,7 @@ match runs the typed text as the Run dialog would.
 | Left, Right | move the selection a column when the caret is at that end of the query, else move the caret |
 | Esc | cancel |
 
-Moving the mouse over a match selects it, and a click picks it.
+Moving the mouse over a match selects it, the wheel moves the selection a row per notch, and a click picks it.
 
 Exit codes: 0 picked, 1 cancelled, 2 error. Errors go to stderr, or to a message box when there is none.
 

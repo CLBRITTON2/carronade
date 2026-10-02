@@ -11,6 +11,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY;
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CHAR, WM_KEYDOWN,
+    WM_MOUSEWHEEL,
 };
 use windows::core::w;
 
@@ -68,6 +69,15 @@ impl Picker {
 
     pub fn press(&self, key: VIRTUAL_KEY) -> Outcome {
         self.post(WM_KEYDOWN, usize::from(key.0))
+    }
+
+    /// Turns the mouse wheel by `delta`, positive away from the person, 120 per notch.
+    #[allow(
+        dead_code,
+        reason = "each test binary compiles its own copy, and only dmenu scrolls"
+    )]
+    pub fn scroll(&self, delta: i16) -> Outcome {
+        self.post(WM_MOUSEWHEEL, usize::from(delta as u16) << 16)
     }
 
     fn post(&self, message: u32, wparam: usize) -> Outcome {
