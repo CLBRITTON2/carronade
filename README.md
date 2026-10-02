@@ -34,7 +34,18 @@ In GlazeWM, also add an `ignore` window rule for `window_process: { equals: 'car
 Matches hold the letters of every typed word in order, with gaps allowed, so `crnd` finds carronade. Words match in
 any order, ignoring case. Letters in a row and at word starts, including capitals inside a name like GlazeWM, rank
 higher, and so do matches in the file name over the folders. Ties keep list order: recent first, then the rest by
-name in apps and shallowest first in files. Enter with no match runs the typed text as the Run dialog would.
+name in apps and shallowest first in files. The letters matched are drawn in `element.highlight`. Enter with no match
+runs the typed text as the Run dialog would.
+
+A word can start or end with an operator:
+
+| Word | Matches |
+| --- | --- |
+| `'word` | the letters in a row anywhere |
+| `^word` | items starting with it |
+| `word$` | items ending with it, such as `.rs$` |
+| `^word$` | the whole item |
+| `!word` | items without it in a row, also `!^word` and `!word$` |
 
 | Key | Action |
 | --- | --- |

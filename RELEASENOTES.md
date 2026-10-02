@@ -17,6 +17,8 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 - Matching is fuzzy: a typed word matches when its letters appear in order, so `crnd` finds carronade. Letters in a
   row, at word starts and in the file name rank higher.
 - The letters a query matched are drawn in the new required `element.highlight` color.
+- Query words take operators: `'word` matches the letters in a row, `^word` at the start, `word$` at the end,
+  `^word$` the whole item, and `!word` drops the items holding it.
 
 ## [0.2.0] - 2026-10-02
 

@@ -11,19 +11,16 @@ pub enum Choice<T> {
     Cancel,
 }
 
-/// Indices of the items holding the letters of every whitespace-separated word of `query` in order, gaps allowed,
-/// ignoring case, best matches first. Equal matches keep their input order, which callers use for recency or depth.
+/// Indices of the items matching every whitespace-separated term of `query` (see `term`), ignoring case, best matches
+/// first. Equal matches keep their input order, which callers use for recency or depth.
 pub fn filter(items: &[String], query: &str) -> Vec<usize> {
-    let words: Vec<Vec<char>> = query
-        .split_whitespace()
-        .map(|word| word.chars().map(lower).collect())
-        .collect();
+    let terms = terms(query);
     let mut ranked: Vec<(Reverse<i32>, usize)> = items
         .iter()
         .enumerate()
         .filter_map(|(index, item)| {
             let letters = letters(item);
-            let fits: Option<Vec<Fit>> = words.iter().map(|word| fit(&letters, word)).collect();
+            let fits: Option<Vec<Fit>> = terms.iter().map(|term| fit(&letters, term)).collect();
             fits.map(|fits| (Reverse(fits.iter().map(|fit| fit.score).sum()), index))
         })
         .collect();
@@ -31,17 +28,136 @@ pub fn filter(items: &[String], query: &str) -> Vec<usize> {
     ranked.into_iter().map(|(_, index)| index).collect()
 }
 
-/// The char positions in `item` of the letters the words of `query` matched in `filter`, ascending.
+/// The char positions in `item` of the letters the terms of `query` matched in `filter`, ascending.
 pub fn matched(item: &str, query: &str) -> Vec<usize> {
     let letters = letters(item);
-    let mut positions: Vec<usize> = query
-        .split_whitespace()
-        .filter_map(|word| fit(&letters, &word.chars().map(lower).collect::<Vec<char>>()))
+    let mut positions: Vec<usize> = terms(query)
+        .iter()
+        .filter_map(|term| fit(&letters, term))
         .flat_map(|fit| fit.positions)
         .collect();
     positions.sort_unstable();
     positions.dedup();
     positions
+}
+
+/// Where a term's letters must sit, after fzf's search syntax.
+enum Kind {
+    /// In order, gaps allowed.
+    Fuzzy,
+    /// `'word`: in a row anywhere.
+    Exact,
+    /// `^word`: in a row at the start.
+    Prefix,
+    /// `word$`: in a row at the end.
+    Suffix,
+    /// `^word$`: the whole item.
+    Whole,
+}
+
+/// One word of a query.
+struct Term {
+    kind: Kind,
+    letters: Vec<char>,
+    /// `!word`: items without the match. A negated term is `Exact` unless anchored.
+    negated: bool,
+}
+
+fn terms(query: &str) -> Vec<Term> {
+    query.split_whitespace().map(term).collect()
+}
+
+/// `word` with its operators, `!`, then `'`, then `^`, then `$`, taken off into the term's kind.
+fn term(word: &str) -> Term {
+    let (negated, word) = word
+        .strip_prefix('!')
+        .map_or((false, word), |rest| (true, rest));
+    let (quoted, word) = word
+        .strip_prefix('\'')
+        .map_or((false, word), |rest| (true, rest));
+    let (prefix, word) = word
+        .strip_prefix('^')
+        .map_or((false, word), |rest| (true, rest));
+    let (suffix, word) = word
+        .strip_suffix('$')
+        .map_or((false, word), |rest| (true, rest));
+    let kind = match (prefix, suffix) {
+        (true, true) => Kind::Whole,
+        (true, false) => Kind::Prefix,
+        (false, true) => Kind::Suffix,
+        (false, false) if quoted || negated => Kind::Exact,
+        (false, false) => Kind::Fuzzy,
+    };
+    Term {
+        kind,
+        letters: word.chars().map(lower).collect(),
+        negated,
+    }
+}
+
+/// How `term` matches `letters`, or `None` when it rules the item out. A term of operators alone, as while one is
+/// being typed, matches everything.
+fn fit(letters: &[Letter], term: &Term) -> Option<Fit> {
+    let none = Fit {
+        score: 0,
+        positions: Vec::new(),
+    };
+    if term.letters.is_empty() {
+        return Some(none);
+    }
+    match (term.negated, find(letters, term)) {
+        (false, found) => found,
+        (true, Some(_)) => None,
+        (true, None) => Some(none),
+    }
+}
+
+/// The best place for `term`'s letters in `letters`, ignoring its negation.
+fn find(letters: &[Letter], term: &Term) -> Option<Fit> {
+    let word = &term.letters;
+    let last = letters.len().checked_sub(word.len())?;
+    let starts = match term.kind {
+        Kind::Fuzzy => return fuzzy(letters, word),
+        Kind::Exact => 0..=last,
+        Kind::Prefix => 0..=0,
+        Kind::Suffix => last..=last,
+        Kind::Whole if last == 0 => 0..=0,
+        Kind::Whole => return None,
+    };
+    // Reversed so that of equal scores the first place wins, since max_by_key keeps the last.
+    starts
+        .rev()
+        .filter_map(|start| run(letters, word, start))
+        .max_by_key(|fit| fit.score)
+}
+
+/// `word` matched as a run of consecutive letters from `start`, scored as `fuzzy` scores a run.
+fn run(letters: &[Letter], word: &[char], start: usize) -> Option<Fit> {
+    let end = start + word.len();
+    let slice = letters.get(start..end)?;
+    if !slice
+        .iter()
+        .zip(word)
+        .all(|(letter, wanted)| letter.letter == *wanted)
+    {
+        return None;
+    }
+    let mut run: Option<i32> = None;
+    let score = slice
+        .iter()
+        .map(|letter| {
+            let earned = match run {
+                None => MATCH + letter.boundary,
+                Some(run) => MATCH + CONSECUTIVE + run.max(letter.boundary),
+            };
+            run = Some(run.map_or(letter.boundary, |run| run.max(letter.boundary)));
+            earned + letter.name
+        })
+        .sum();
+    Some(Fit {
+        score,
+        positions: (start..end).collect(),
+    })
 }
 
 const MATCH: i32 = 16;
@@ -104,7 +220,7 @@ struct Fit {
 
 /// The best match of `word`'s letters in order in `letters`, or `None` when they do not all occur. Each row holds, per
 /// position, the best match of the word so far with its last letter there.
-fn fit(letters: &[Letter], word: &[char]) -> Option<Fit> {
+fn fuzzy(letters: &[Letter], word: &[char]) -> Option<Fit> {
     let (first, rest) = word.split_first()?;
     let mut rows: Vec<Vec<Option<Cell>>> = vec![
         letters
@@ -412,6 +528,40 @@ mod tests {
         assert_eq!(matched("src\\main.rs", "main src"), [0, 1, 2, 4, 5, 6, 7]);
         assert_eq!(matched("SnowMan", "m"), [4]);
         assert_eq!(matched("notepad", "x"), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_quote_matches_the_letters_in_a_row() {
+        let apps = items(&["carronade", "rotation"]);
+        assert_eq!(filter(&apps, "ron"), [1, 0]);
+        assert_eq!(filter(&apps, "'ron"), [0]);
+    }
+
+    #[test]
+    fn a_caret_and_a_dollar_anchor_to_the_ends() {
+        let entries = items(&["main.rs", "domain.rs", "main.rsx", "main"]);
+        assert_eq!(filter(&entries, "^ma"), [0, 2, 3]);
+        assert_eq!(filter(&entries, ".rs$"), [0, 1]);
+        assert_eq!(filter(&entries, "^main$"), [3]);
+    }
+
+    #[test]
+    fn a_bang_drops_the_items_holding_the_word() {
+        let entries = items(&["main.rs", "main.go", "go.mod"]);
+        assert_eq!(filter(&entries, "main !.go"), [0]);
+        assert_eq!(filter(&entries, "!^go"), [0, 1]);
+    }
+
+    #[test]
+    fn operators_alone_match_everything() {
+        let entries = items(&["main.rs", "main.go"]);
+        assert_eq!(filter(&entries, "! ^ ' $"), [0, 1]);
+    }
+
+    #[test]
+    fn matched_marks_the_run_of_an_operator_and_nothing_for_a_negation() {
+        assert_eq!(matched("main.rs", ".rs$ !go"), [4, 5, 6]);
+        assert_eq!(matched("a.rs\\b.rs", "'.rs"), [6, 7, 8]);
     }
 
     #[test]
