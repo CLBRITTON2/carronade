@@ -15,6 +15,8 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
   once.
 - The mouse wheel moves the selection a row per notch, stopping at either end of the list.
 - Ctrl+Shift+Enter in drun launches the selected app as administrator. Declining the UAC prompt exits as a cancel.
+- files lists the entries opened recently first, as drun does with apps. Their history lives in
+  `%LOCALAPPDATA%\carronade\files-history.toml`.
 
 ## [0.1.0] - 2026-10-01
 

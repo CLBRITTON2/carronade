@@ -122,7 +122,8 @@ struct Settings {
     terminal: String,
     apps_icon: String,
     files_icon: String,
-    recent: Vec<String>,
+    recent_apps: Vec<String>,
+    recent_files: Vec<String>,
 }
 
 impl Settings {
@@ -152,7 +153,7 @@ impl Found {
                         apps::load,
                         apps::list,
                     )?;
-                    self.apps = Some(history::by_recent(found, &settings.recent));
+                    self.apps = Some(history::by_recent(found, &settings.recent_apps, app_id));
                 }
                 let apps = self.apps.iter().flatten().cloned().map(Item::App);
                 apps.chain(Command::ALL.map(Item::Command)).collect()
@@ -160,12 +161,9 @@ impl Found {
             Kind::Files => {
                 if self.files.is_none() {
                     let list = || files::list(&settings.roots);
-                    self.files = Some(cached(
-                        settings.files_cache,
-                        files::cache_path,
-                        files::load,
-                        list,
-                    )?);
+                    let found = cached(settings.files_cache, files::cache_path, files::load, list)?;
+                    let recent = &settings.recent_files;
+                    self.files = Some(history::by_recent(found, recent, entry_path));
                 }
                 self.files
                     .iter()
@@ -176,6 +174,14 @@ impl Found {
             }
         })
     }
+}
+
+fn app_id(app: &App) -> &str {
+    &app.id
+}
+
+fn entry_path(entry: &files::Entry) -> &str {
+    &entry.path
 }
 
 /// What `list` found last time when `cache` is on and there was a last time, else what it finds now.
@@ -201,11 +207,12 @@ enum Picked {
     Admin(App),
 }
 
-/// Opens the pick from apps and files, starting on `start`: launches an app, elevated or not, recording it as recent,
-/// runs a system command, opens a file or folder, starts the terminal in an entry's folder, or runs the typed text as
+/// Opens the pick from apps and files, starting on `start`: launches an app, elevated or not, runs a system command,
+/// opens a file or folder, recording opened apps and entries as recent, starts the terminal in an entry's folder, or runs the typed text as
 /// the Run dialog would. Returns whether there was a pick, which a declined UAC prompt is not.
 fn search(config: Config, start: Kind) -> Result<bool, Error> {
-    let history_path = history::path()?;
+    let apps_history = history::apps_path()?;
+    let files_history = history::files_path()?;
     let settings = Settings {
         drun_cache: config.drun.cache,
         files_cache: config.files.cache,
@@ -213,7 +220,8 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         terminal: config.files.terminal.clone(),
         apps_icon: config.input.apps_icon.clone(),
         files_icon: config.input.files_icon.clone(),
-        recent: history::load(&history_path)?,
+        recent_apps: history::load(&apps_history)?,
+        recent_files: history::load(&files_history)?,
     };
     let mut found = Found {
         apps: None,
@@ -240,13 +248,19 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
     let picked = match choice {
         Picked::Open(Choice::Item(Item::App(app))) => {
             apps::launch(&app.target())?;
-            history::save(&history_path, history::launched(&settings.recent, &app.id))?;
+            history::save(
+                &apps_history,
+                history::launched(&settings.recent_apps, &app.id),
+            )?;
             true
         }
         Picked::Admin(app) => {
             let launched = apps::launch_as_admin(&app.target())?;
             if launched {
-                history::save(&history_path, history::launched(&settings.recent, &app.id))?;
+                history::save(
+                    &apps_history,
+                    history::launched(&settings.recent_apps, &app.id),
+                )?;
             }
             launched
         }
@@ -256,6 +270,10 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         }
         Picked::Open(Choice::Item(Item::Entry(entry))) => {
             apps::launch(&entry.path)?;
+            history::save(
+                &files_history,
+                history::launched(&settings.recent_files, &entry.path),
+            )?;
             true
         }
         Picked::Open(Choice::Text(text)) => {

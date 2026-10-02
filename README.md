@@ -30,7 +30,8 @@ Picking one runs it at once, with no confirmation. Tab switches between drun and
 In GlazeWM, also add an `ignore` window rule for `window_process: { equals: 'carronade' }`.
 
 Matches contain every typed word in any order, ignoring case. Name matches rank above folder matches, and word starts
-above matches inside a word. Ties keep list order: recent apps first in drun, shallowest first in files. Enter with no
+above matches inside a word. Ties keep list order: recent first, then the rest by name in drun and shallowest first in
+files. Enter with no
 match runs the typed text as the Run dialog would.
 
 | Key | Action |
