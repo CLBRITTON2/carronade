@@ -194,6 +194,7 @@ mod tests {
         radius = "1em"
         color = "#ffffff"
         selected = "#ffffff"
+        highlight = "#ffffff"
         icon = "20px"
         gap = "3px"
         [apps]

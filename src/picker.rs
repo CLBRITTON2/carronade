@@ -23,9 +23,9 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_HIT_TEST_METRICS, DWRITE_MEASURING_MODE_NATURAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS,
-    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
-    DWriteCreateFactory, IDWriteFactory, IDWriteFontCollection, IDWriteTextFormat,
-    IDWriteTextLayout,
+    DWRITE_TEXT_RANGE, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteFontCollection,
+    IDWriteTextFormat, IDWriteTextLayout,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -156,6 +156,8 @@ struct Canvas {
     dc: HDC,
     target: ID2D1DCRenderTarget,
     brush: ID2D1SolidColorBrush,
+    /// The matched letters' color, its own brush since a text layout keeps the brush, not its color.
+    highlight: ID2D1SolidColorBrush,
     dwrite: IDWriteFactory,
     wic: IWICImagingFactory,
     text: IDWriteTextFormat,
@@ -414,6 +416,9 @@ fn open(
     unsafe { target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE) };
     let brush = unsafe { target.CreateSolidColorBrush(&d2d_color(config.input.color), None) }
         .map_err(win32("CreateSolidColorBrush"))?;
+    let highlight =
+        unsafe { target.CreateSolidColorBrush(&d2d_color(config.element.highlight), None) }
+            .map_err(win32("CreateSolidColorBrush"))?;
     let image = match &config.window.image {
         Some(path) => Some(image(&wic, &target, path, layout.width, layout.height)?),
         None => None,
@@ -438,6 +443,7 @@ fn open(
             dc,
             target,
             brush,
+            highlight,
             dwrite,
             wic,
             text,
@@ -1045,7 +1051,7 @@ impl State {
                 },
             };
             let text = self.items.get(index).map_or("", String::as_str);
-            canvas.text(text, &canvas.text, label, element.color);
+            canvas.label(text, &menu::matched(text, &typed), label)?;
         }
         unsafe { target.EndDraw(None, None) }.map_err(win32("ID2D1RenderTarget::EndDraw"))?;
         canvas.show()
@@ -1082,6 +1088,46 @@ impl Canvas {
                 DWRITE_MEASURING_MODE_NATURAL,
             );
         }
+    }
+
+    /// Draws a match's label in `element.color`, with the chars at `matched` in `element.highlight`.
+    fn label(&self, text: &str, matched: &[usize], rect: Rect) -> Result<(), Error> {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let layout = unsafe {
+            self.dwrite.CreateTextLayout(
+                &units,
+                &self.text,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+            )
+        }
+        .map_err(win32("CreateTextLayout"))?;
+        let mut start: u32 = 0;
+        for (at, letter) in text.chars().enumerate() {
+            let length = letter.len_utf16() as u32;
+            if matched.binary_search(&at).is_ok() {
+                let range = DWRITE_TEXT_RANGE {
+                    startPosition: start,
+                    length,
+                };
+                unsafe { layout.SetDrawingEffect(&self.highlight, range) }
+                    .map_err(win32("IDWriteTextLayout::SetDrawingEffect"))?;
+            }
+            start += length;
+        }
+        unsafe {
+            self.brush.SetColor(&d2d_color(self.config.element.color));
+            self.target.DrawTextLayout(
+                windows_numerics::Vector2 {
+                    X: rect.left,
+                    Y: rect.top,
+                },
+                &layout,
+                &self.brush,
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+            );
+        }
+        Ok(())
     }
 
     /// Draws the typed text, scrolled left far enough to keep the caret in view, and returns the caret's offset from

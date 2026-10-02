@@ -23,12 +23,25 @@ pub fn filter(items: &[String], query: &str) -> Vec<usize> {
         .enumerate()
         .filter_map(|(index, item)| {
             let letters = letters(item);
-            let scores: Option<Vec<i32>> = words.iter().map(|word| score(&letters, word)).collect();
-            scores.map(|scores| (Reverse(scores.iter().sum()), index))
+            let fits: Option<Vec<Fit>> = words.iter().map(|word| fit(&letters, word)).collect();
+            fits.map(|fits| (Reverse(fits.iter().map(|fit| fit.score).sum()), index))
         })
         .collect();
     ranked.sort_by_key(|&(rank, _)| rank);
     ranked.into_iter().map(|(_, index)| index).collect()
+}
+
+/// The char positions in `item` of the letters the words of `query` matched in `filter`, ascending.
+pub fn matched(item: &str, query: &str) -> Vec<usize> {
+    let letters = letters(item);
+    let mut positions: Vec<usize> = query
+        .split_whitespace()
+        .filter_map(|word| fit(&letters, &word.chars().map(lower).collect::<Vec<char>>()))
+        .flat_map(|fit| fit.positions)
+        .collect();
+    positions.sort_unstable();
+    positions.dedup();
+    positions
 }
 
 const MATCH: i32 = 16;
@@ -78,50 +91,83 @@ struct Cell {
     /// The boundary bonus of the first letter of this run of consecutive matches, which every letter of the run earns,
     /// so `src` matched whole at a word start beats its letters scattered over other word starts.
     run: i32,
+    /// Where the word's previous letter sits in this match.
+    from: Option<usize>,
 }
 
-/// The best score of `word`'s letters matched in order in `letters`, or `None` when they do not all occur. Each row
-/// holds, per position, the best match of the word so far with its last letter there.
-fn score(letters: &[Letter], word: &[char]) -> Option<i32> {
+/// A word's best match in an item.
+struct Fit {
+    score: i32,
+    /// The char positions of the word's letters in the item, in order.
+    positions: Vec<usize>,
+}
+
+/// The best match of `word`'s letters in order in `letters`, or `None` when they do not all occur. Each row holds, per
+/// position, the best match of the word so far with its last letter there.
+fn fit(letters: &[Letter], word: &[char]) -> Option<Fit> {
     let (first, rest) = word.split_first()?;
-    let mut row: Vec<Option<Cell>> = letters
-        .iter()
-        .map(|letter| {
-            (letter.letter == *first).then_some(Cell {
-                score: MATCH + letter.boundary + letter.name,
-                run: letter.boundary,
-            })
-        })
-        .collect();
-    for wanted in rest {
-        // The best score that reaches this position across a gap of at least one letter.
-        let mut gapped: Option<i32> = None;
-        let mut before: Option<Cell> = None;
-        row = letters
+    let mut rows: Vec<Vec<Option<Cell>>> = vec![
+        letters
             .iter()
-            .zip(&row)
-            .map(|(letter, &here)| {
-                let extended = before.map(|cell| {
+            .map(|letter| {
+                (letter.letter == *first).then_some(Cell {
+                    score: MATCH + letter.boundary + letter.name,
+                    run: letter.boundary,
+                    from: None,
+                })
+            })
+            .collect(),
+    ];
+    for wanted in rest {
+        // The best score that reaches this position across a gap of at least one letter, and where it ended.
+        let mut gapped: Option<(i32, usize)> = None;
+        let mut before: Option<(Cell, usize)> = None;
+        let row = letters
+            .iter()
+            .zip(rows.last()?)
+            .enumerate()
+            .map(|(at, (letter, &here))| {
+                let extended = before.map(|(cell, from)| {
                     let run = cell.run.max(letter.boundary);
                     Cell {
                         score: cell.score + MATCH + CONSECUTIVE + run + letter.name,
                         run,
+                        from: Some(from),
                     }
                 });
-                let jumped = gapped.map(|score| Cell {
+                let jumped = gapped.map(|(score, from)| Cell {
                     score: score + MATCH + letter.boundary + letter.name,
                     run: letter.boundary,
+                    from: Some(from),
                 });
                 let cell = extended.max(jumped).filter(|_| letter.letter == *wanted);
                 gapped = gapped
-                    .map(|score| score - GAP_EXTENSION)
-                    .max(before.map(|cell| cell.score - GAP_START));
-                before = here;
+                    .map(|(score, from)| (score - GAP_EXTENSION, from))
+                    .max(before.map(|(cell, from)| (cell.score - GAP_START, from)));
+                before = here.map(|cell| (cell, at));
                 cell
             })
             .collect();
+        rows.push(row);
     }
-    row.into_iter().flatten().map(|cell| cell.score).max()
+    let (end, best) = rows
+        .last()?
+        .iter()
+        .enumerate()
+        .filter_map(|(at, cell)| cell.map(|cell| (at, cell)))
+        .max_by_key(|&(_, cell)| cell.score)?;
+    let mut positions = vec![end];
+    let mut from = best.from;
+    for row in rows.iter().rev().skip(1) {
+        let Some(at) = from else { break };
+        positions.push(at);
+        from = row.get(at).copied().flatten().and_then(|cell| cell.from);
+    }
+    positions.reverse();
+    Some(Fit {
+        score: best.score,
+        positions,
+    })
 }
 
 /// The row `by` rows from `cursor`, wrapping at both ends of `len` rows.
@@ -358,6 +404,14 @@ mod tests {
     fn every_word_adds_to_the_rank() {
         let entries = items(&["src\\domain.rs", "src\\main.rs"]);
         assert_eq!(filter(&entries, "src main"), [1, 0]);
+    }
+
+    #[test]
+    fn matched_marks_the_letters_each_word_matched() {
+        assert_eq!(matched("carronade", "cade"), [0, 1, 7, 8]);
+        assert_eq!(matched("src\\main.rs", "main src"), [0, 1, 2, 4, 5, 6, 7]);
+        assert_eq!(matched("SnowMan", "m"), [4]);
+        assert_eq!(matched("notepad", "x"), Vec::<usize>::new());
     }
 
     #[test]

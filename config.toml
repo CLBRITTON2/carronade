@@ -40,12 +40,13 @@ spacing = "0.25em"
 columns = 1
 lines = 8
 
-# One match: its icon, then its label.
+# One match: its icon, then its label, with the letters the query matched in highlight.
 [element]
 padding = "0.5em"
 radius = "0.5em"
 color = "#ffffff"
 selected = "#ffffff1a"
+highlight = "#60cdff"
 icon = "2em"
 gap = "0.75em"
 

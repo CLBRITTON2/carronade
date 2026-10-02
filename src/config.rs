@@ -87,6 +87,7 @@ pub struct Element {
     pub radius: Length,
     pub color: Color,
     pub selected: Color,
+    pub highlight: Color,
     pub icon: Length,
     pub gap: Length,
 }
