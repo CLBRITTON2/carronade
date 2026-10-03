@@ -22,14 +22,20 @@ use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MessageBoxW};
 use windows::core::{HSTRING, w};
 
 fn main() -> ExitCode {
-    match run(std::env::args().skip(1).collect()) {
+    let (path, mode) = match parse(std::env::args().skip(1).collect()) {
+        Ok(parsed) => parsed,
+        Err(usage) => return fail(&usage),
+    };
+    match run(path, mode) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
-        Err(error) => {
-            report(&error);
-            ExitCode::from(2)
-        }
+        Err(error) => fail(&error),
     }
+}
+
+fn fail(error: &dyn std::error::Error) -> ExitCode {
+    report(error);
+    ExitCode::from(2)
 }
 
 enum Mode {
@@ -38,19 +44,28 @@ enum Mode {
     Files,
 }
 
-/// Runs the mode `args` names, returning whether something was picked.
-fn run(args: Vec<String>) -> Result<bool, Error> {
+#[derive(Debug, thiserror::Error)]
+#[error("usage: carronade [--config <path>] <dmenu|apps|files>, got {0:?}")]
+struct Usage(Vec<String>);
+
+/// The config path and the mode `args` name.
+fn parse(args: Vec<String>) -> Result<(Option<PathBuf>, Mode), Usage> {
     let (path, mode) = match args.as_slice() {
         [mode] => (None, mode),
         [flag, path, mode] if flag == "--config" => (Some(PathBuf::from(path)), mode),
-        _ => return Err(Error::Usage(args)),
+        _ => return Err(Usage(args)),
     };
     let mode = match mode.as_str() {
         "dmenu" => Mode::Dmenu,
         "apps" => Mode::Apps,
         "files" => Mode::Files,
-        _ => return Err(Error::Usage(args)),
+        _ => return Err(Usage(args)),
     };
+    Ok((path, mode))
+}
+
+/// Runs `mode` with the config at `path`, or the default one, returning whether something was picked.
+fn run(path: Option<PathBuf>, mode: Mode) -> Result<bool, Error> {
     let config = config::load(&path.map_or_else(config::path, Ok)?)?;
     match mode {
         Mode::Dmenu => dmenu(config),
@@ -325,7 +340,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
 }
 
 /// Writes to stderr when the caller gave one, else shows a message box: started from a hotkey, nothing reads stderr.
-fn report(error: &Error) {
+fn report(error: &dyn std::error::Error) {
     let text = chain(error);
     match unsafe { GetStdHandle(STD_ERROR_HANDLE) } {
         Ok(handle) if !handle.is_invalid() => eprintln!("carronade: {text}"),
@@ -336,11 +351,9 @@ fn report(error: &Error) {
 }
 
 /// `error` and each cause below it, outermost first, joined by `: `.
-fn chain(error: &Error) -> String {
-    std::iter::successors(Some(error as &dyn std::error::Error), |error| {
-        error.source()
-    })
-    .map(ToString::to_string)
-    .collect::<Vec<String>>()
-    .join(": ")
+fn chain(error: &dyn std::error::Error) -> String {
+    std::iter::successors(Some(error), |error| error.source())
+        .map(ToString::to_string)
+        .collect::<Vec<String>>()
+        .join(": ")
 }
