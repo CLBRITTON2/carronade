@@ -29,7 +29,7 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
     AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
-    CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, GetMonitorInfoW, HDC,
+    CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, GetMonitorInfoW, HBITMAP, HDC,
     MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SelectObject,
 };
 use windows::Win32::Graphics::Imaging::{
@@ -60,7 +60,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_ACTIVATE, WM_APP, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
-use windows::core::{HSTRING, PCWSTR, w};
+use windows::core::{HSTRING, Owned, PCWSTR, w};
 use windows_numerics::Matrix3x2;
 
 use crate::apps;
@@ -165,7 +165,6 @@ struct State {
 struct Canvas {
     window: HWND,
     origin: POINT,
-    dc: HDC,
     target: ID2D1DCRenderTarget,
     brush: ID2D1SolidColorBrush,
     /// The matched letters' color, its own brush since a text layout keeps the brush, not its color.
@@ -183,6 +182,19 @@ struct Canvas {
     config: Config,
     em: f32,
     scale: f32,
+    // Fields drop in order: `target` draws into `dc`, and `dib` cannot be deleted while `dc` holds it.
+    dc: MemoryDc,
+    #[expect(dead_code, reason = "held only so drop deletes it")]
+    dib: Owned<HBITMAP>,
+}
+
+/// A `CreateCompatibleDC` device context, deleted on drop. Drop cannot report a failed `DeleteDC`.
+struct MemoryDc(HDC);
+
+impl Drop for MemoryDc {
+    fn drop(&mut self) {
+        _ = unsafe { DeleteDC(self.0) };
+    }
 }
 
 // Win32 and shell calls re-enter the window procedure, so every borrow ends before the next call that can.
@@ -387,10 +399,6 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
     }
     .map_err(win32("CreateWindowExW"))?;
 
-    let dc = unsafe { CreateCompatibleDC(None) };
-    if dc.is_invalid() {
-        return Err(last("CreateCompatibleDC"));
-    }
     let header = BITMAPINFOHEADER {
         biSize: size_of::<BITMAPINFOHEADER>() as u32,
         biWidth: width,
@@ -406,10 +414,18 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
         ..Default::default()
     };
     let mut bits = std::ptr::null_mut();
-    let dib =
-        unsafe { CreateDIBSection(Some(dc), &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0) }
-            .map_err(win32("CreateDIBSection"))?;
-    if unsafe { SelectObject(dc, dib.into()) }.is_invalid() {
+    // Created before `dc`, so on an early return `dc` drops first and releases it. DIB_RGB_COLORS needs no DC.
+    let dib = unsafe {
+        Owned::new(
+            CreateDIBSection(None, &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0)
+                .map_err(win32("CreateDIBSection"))?,
+        )
+    };
+    let dc = MemoryDc(unsafe { CreateCompatibleDC(None) });
+    if dc.0.is_invalid() {
+        return Err(last("CreateCompatibleDC"));
+    }
+    if unsafe { SelectObject(dc.0, (*dib).into()) }.is_invalid() {
         return Err(last("SelectObject"));
     }
     let properties = D2D1_RENDER_TARGET_PROPERTIES {
@@ -432,7 +448,7 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
         right: width,
         bottom: height,
     };
-    unsafe { target.BindDC(dc, &bounds) }.map_err(win32("ID2D1DCRenderTarget::BindDC"))?;
+    unsafe { target.BindDC(dc.0, &bounds) }.map_err(win32("ID2D1DCRenderTarget::BindDC"))?;
     // ClearType needs an opaque background to blend against.
     unsafe { target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE) };
     let brush = unsafe { target.CreateSolidColorBrush(&d2d_color(config.input.color), None) }
@@ -460,7 +476,6 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
         canvas: Canvas {
             window,
             origin,
-            dc,
             target,
             brush,
             highlight,
@@ -475,6 +490,8 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
             config,
             em,
             scale,
+            dc,
+            dib,
         },
     }));
     // The first frame goes up without icons, which take tens of ms each to load.
@@ -1216,7 +1233,7 @@ impl Canvas {
                 None,
                 Some(&self.origin),
                 Some(&size),
-                Some(self.dc),
+                Some(self.dc.0),
                 Some(&POINT::default()),
                 Default::default(),
                 Some(&blend),
