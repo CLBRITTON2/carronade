@@ -832,14 +832,19 @@ fn clipboard_text(format: u32) -> Result<String, Error> {
     if data.is_null() {
         return Err(last("GlobalLock"));
     }
-    let text = locked_text(global, data);
+    // SAFETY: `data` came from GlobalLock on `global`, which stays locked until GlobalUnlock below.
+    let text = unsafe { locked_text(global, data) };
     // GlobalUnlock reports releasing the last lock as a failure, so its result says nothing.
     _ = unsafe { GlobalUnlock(global) };
     text
 }
 
 /// The text up to the first NUL in the locked `data`, within its block: another program can set one without a NUL.
-fn locked_text(global: HGLOBAL, data: *const u16) -> Result<String, Error> {
+///
+/// # Safety
+///
+/// `data` must be the pointer `GlobalLock` returned for `global`, and the block must stay locked for the call.
+unsafe fn locked_text(global: HGLOBAL, data: *const u16) -> Result<String, Error> {
     let units = unsafe { GlobalSize(global) } / size_of::<u16>();
     if units == 0 {
         return Err(last("GlobalSize"));
@@ -1272,7 +1277,8 @@ mod tests {
             return Err("GlobalLock failed".into());
         }
         unsafe { std::ptr::copy_nonoverlapping(units.as_ptr(), data, units.len()) };
-        let text = locked_text(global, data);
+        // SAFETY: `data` came from GlobalLock on `global`, which stays locked until GlobalUnlock below.
+        let text = unsafe { locked_text(global, data) };
         _ = unsafe { GlobalUnlock(global) };
         // GlobalFree returns NULL on success, which windows-rs reports as an error, so its result says nothing.
         _ = unsafe { GlobalFree(Some(global)) };
