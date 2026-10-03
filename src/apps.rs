@@ -179,12 +179,18 @@ const LARGEST: i32 = 256;
 /// small one, unscaled, in the middle of a translucent frame, so that one is fetched again at `size`.
 pub fn display_icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
     let large = icon(target, LARGEST)?;
-    if opaque_side(target, large)? * 2 >= LARGEST.unsigned_abs() as usize {
+    let side = opaque_side(target, large);
+    if let Ok(side) = side
+        && side * 2 >= LARGEST.unsigned_abs() as usize
+    {
         return Ok(large);
     }
-    unsafe { DeleteObject(large.into()) }
+    let deleted = unsafe { DeleteObject(large.into()) }
         .ok()
-        .map_err(win32("DeleteObject"))?;
+        .map_err(win32("DeleteObject"));
+    // The bitmap error is the cause, so it wins over a failed delete.
+    side?;
+    deleted?;
     icon(target, size)
 }
 
