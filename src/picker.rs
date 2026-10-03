@@ -6,7 +6,8 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use windows::Win32::Foundation::{
-    GENERIC_READ, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
+    GENERIC_READ, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, SetLastError, WIN32_ERROR,
+    WPARAM,
 };
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
@@ -833,13 +834,21 @@ fn clicked(x: f32, y: f32) -> Result<(), Error> {
 /// The clipboard's text, or nothing when it holds none.
 fn clipboard() -> Result<String, Error> {
     let format = u32::from(CF_UNICODETEXT.0);
-    if unsafe { IsClipboardFormatAvailable(format) }.is_err() {
-        return Ok(String::new());
+    // It returns false both for no text and for a failure, and sets the last error only for a failure.
+    unsafe { SetLastError(WIN32_ERROR(0)) };
+    if let Err(error) = unsafe { IsClipboardFormatAvailable(format) } {
+        if error.code().is_ok() {
+            return Ok(String::new());
+        }
+        return Err(win32("IsClipboardFormatAvailable")(error));
     }
     unsafe { OpenClipboard(None) }.map_err(win32("OpenClipboard"))?;
     let text = clipboard_text(format);
-    unsafe { CloseClipboard() }.map_err(win32("CloseClipboard"))?;
-    text
+    let closed = unsafe { CloseClipboard() }.map_err(win32("CloseClipboard"));
+    // A failed read is the cause, so it wins over a failed close.
+    let text = text?;
+    closed?;
+    Ok(text)
 }
 
 fn clipboard_text(format: u32) -> Result<String, Error> {
