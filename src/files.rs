@@ -14,6 +14,7 @@ use crate::store;
 pub struct Entry {
     /// The path below its root, which the query matches against.
     pub label: String,
+    /// A `String`, not a `PathBuf`: it is also a shell target and a history key, so `list` rejects a non-Unicode one.
     pub path: String,
     depth: usize,
 }
@@ -53,15 +54,14 @@ pub fn folder(path: &Path) -> Result<PathBuf, Error> {
         path: path.to_owned(),
         source,
     })?;
-    match metadata.is_dir() {
-        true => Ok(path.to_owned()),
-        false => path
-            .parent()
-            .map(Path::to_owned)
-            .ok_or_else(|| Error::NoParent {
-                path: path.to_owned(),
-            }),
+    if metadata.is_dir() {
+        return Ok(path.to_owned());
     }
+    path.parent()
+        .map(Path::to_owned)
+        .ok_or_else(|| Error::NoParent {
+            path: path.to_owned(),
+        })
 }
 
 /// The format version of `files.toml`, raised when `Entry` changes shape.

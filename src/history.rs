@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-use crate::store;
+use crate::store::{self, UnixSeconds};
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,8 +28,7 @@ pub struct Use {
     /// An `App::id` in the apps history, an `Entry::path` in the files one.
     key: String,
     count: u32,
-    /// Seconds since the Unix epoch.
-    last: u64,
+    last: UnixSeconds,
 }
 
 /// `%LOCALAPPDATA%\carronade\history.toml`, the apps launched.
@@ -47,7 +46,7 @@ const VERSION: i64 = 1;
 
 /// The uses `save` wrote to `path`, empty before the first. A history of 0.3.0 or earlier loads as one use per key, a
 /// second apart before `now` in its order.
-pub fn load(path: &Path, now: u64) -> Result<Vec<Use>, Error> {
+pub fn load(path: &Path, now: UnixSeconds) -> Result<Vec<Use>, Error> {
     // 0.3.0's history and this format's first saves carry no version, so only the shape tells them apart.
     match store::load::<History>(path, VERSION) {
         Ok(history) => Ok(history.map_or_else(Vec::new, |history| history.used)),
@@ -59,13 +58,13 @@ pub fn load(path: &Path, now: u64) -> Result<Vec<Use>, Error> {
     }
 }
 
-fn counted(order: Order, now: u64) -> Vec<Use> {
+fn counted(order: Order, now: UnixSeconds) -> Vec<Use> {
     (0..)
         .zip(order.launched)
         .map(|(age, key)| Use {
             key,
             count: 1,
-            last: now.saturating_sub(age),
+            last: now.before(age),
         })
         .collect()
 }
@@ -75,7 +74,7 @@ pub fn save(path: &Path, used: Vec<Use>) -> Result<(), Error> {
 }
 
 /// `uses` with one more use of `key` at `now`.
-pub fn used(uses: &[Use], key: &str, now: u64) -> Vec<Use> {
+pub fn used(uses: &[Use], key: &str, now: UnixSeconds) -> Vec<Use> {
     let count = uses
         .iter()
         .find(|other| other.key == key)
@@ -95,11 +94,11 @@ pub fn used(uses: &[Use], key: &str, now: u64) -> Vec<Use> {
 const BOOST: i32 = 4;
 
 /// The score each key's uses add to its matches by `now`: `BOOST` per doubling of zoxide's frecency, the count
-/// weighted by the age of the last use (https://github.com/ajeetdsouza/zoxide/wiki/Algorithm).
-pub fn boosts(uses: &[Use], now: u64) -> HashMap<String, i32> {
+/// weighted by the age of the last use (<https://github.com/ajeetdsouza/zoxide/wiki/Algorithm>).
+pub fn boosts(uses: &[Use], now: UnixSeconds) -> HashMap<String, i32> {
     uses.iter()
         .map(|this| {
-            let age = now.saturating_sub(this.last);
+            let age = now.since(this.last);
             let weight = match age {
                 0..3_600 => 16,
                 3_600..86_400 => 8,
@@ -107,6 +106,7 @@ pub fn boosts(uses: &[Use], now: u64) -> HashMap<String, i32> {
                 _ => 1,
             };
             let frecency = this.count.saturating_mul(weight);
+            // The log2 of a u64 is below 64.
             let doublings = frecency.saturating_add(1).ilog2() as i32;
             (this.key.clone(), BOOST * doublings)
         })
@@ -117,9 +117,9 @@ pub fn boosts(uses: &[Use], now: u64) -> HashMap<String, i32> {
 mod tests {
     use super::*;
 
-    const NOW: u64 = 10_000_000;
+    const NOW: UnixSeconds = UnixSeconds(10_000_000);
 
-    fn one(key: &str, count: u32, last: u64) -> Use {
+    fn one(key: &str, count: u32, last: UnixSeconds) -> Use {
         Use {
             key: key.to_owned(),
             count,
@@ -127,22 +127,29 @@ mod tests {
         }
     }
 
+    fn at(seconds: u64) -> UnixSeconds {
+        UnixSeconds(seconds)
+    }
+
     #[test]
     fn a_use_counts_once_more_and_moves_to_the_front() {
-        let uses = [one("a", 2, 10), one("b", 5, 20)];
-        assert_eq!(used(&uses, "b", NOW), [one("b", 6, NOW), one("a", 2, 10)]);
+        let uses = [one("a", 2, at(10)), one("b", 5, at(20))];
+        assert_eq!(
+            used(&uses, "b", NOW),
+            [one("b", 6, NOW), one("a", 2, at(10))]
+        );
         assert_eq!(
             used(&uses, "new", NOW),
-            [one("new", 1, NOW), one("a", 2, 10), one("b", 5, 20)]
+            [one("new", 1, NOW), one("a", 2, at(10)), one("b", 5, at(20))]
         );
     }
 
     #[test]
     fn frequent_and_recent_uses_boost_more() {
         let uses = [
-            one("daily", 30, NOW - 60),
+            one("daily", 30, NOW.before(60)),
             one("once now", 1, NOW),
-            one("once last month", 1, NOW - 2_592_000),
+            one("once last month", 1, NOW.before(2_592_000)),
         ];
         let boosts = boosts(&uses, NOW);
         assert_eq!(boosts.get("daily"), Some(&(BOOST * 8)));
@@ -157,7 +164,7 @@ mod tests {
         };
         assert_eq!(
             counted(order, NOW),
-            [one("a", 1, NOW), one("b", 1, NOW - 1)]
+            [one("a", 1, NOW), one("b", 1, NOW.before(1))]
         );
     }
 }

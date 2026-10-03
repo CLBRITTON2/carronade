@@ -4,13 +4,10 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::UI::Shell::{
-    FOLDERID_Profile, FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
-};
-use windows::core::GUID;
+use windows::Win32::UI::Shell::{FOLDERID_Profile, FOLDERID_RoamingAppData};
 
-use crate::error::{Error, win32};
+use crate::error::Error;
+use crate::platform::known_folder;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -178,12 +175,12 @@ impl TryFrom<String> for Color {
             6 => value << 8 | 0xff,
             _ => value,
         };
-        let channel = |shift: u32| ((rgba >> shift) & 0xff) as f32 / 255.0;
+        let [red, green, blue, alpha] = rgba.to_be_bytes().map(|byte| f32::from(byte) / 255.0);
         Ok(Color {
-            red: channel(24),
-            green: channel(16),
-            blue: channel(8),
-            alpha: channel(0),
+            red,
+            green,
+            blue,
+            alpha,
         })
     }
 }
@@ -231,14 +228,6 @@ pub fn path() -> Result<PathBuf, Error> {
     Ok(known_folder(&FOLDERID_RoamingAppData)?
         .join("carronade")
         .join("config.toml"))
-}
-
-pub(crate) fn known_folder(id: &GUID) -> Result<PathBuf, Error> {
-    let folder = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }
-        .map_err(win32("SHGetKnownFolderPath"))?;
-    let text = unsafe { folder.to_string() };
-    unsafe { CoTaskMemFree(Some(folder.0 as _)) };
-    Ok(PathBuf::from(text?))
 }
 
 #[cfg(test)]

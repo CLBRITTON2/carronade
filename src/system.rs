@@ -51,7 +51,7 @@ impl Row for Command {
         None
     }
 
-    /// Segoe MDL2 Assets glyphs: Lock, LeaveChat, QuietHours, UpdateRestore and PowerButton.
+    /// Segoe MDL2 Assets glyphs: `Lock`, `LeaveChat`, `QuietHours`, `UpdateRestore` and `PowerButton`.
     fn icon(&self) -> Option<Picture> {
         Some(Picture::Glyph(match self {
             Command::Lock => '\u{e72e}',
@@ -69,12 +69,17 @@ impl Row for Command {
 
 pub fn run(command: Command) -> Result<(), Error> {
     match command {
+        // SAFETY: takes no arguments and only asks the session to lock.
         Command::Lock => unsafe { LockWorkStation() }.map_err(win32("LockWorkStation")),
         Command::SignOut => exit_windows(EWX_LOGOFF),
-        Command::Hibernate => match unsafe { SetSuspendState(true, false, false) } {
-            true => Ok(()),
-            false => Err(last("SetSuspendState")),
-        },
+        Command::Hibernate => {
+            // SAFETY: takes plain flags and no pointers.
+            if unsafe { SetSuspendState(true, false, false) } {
+                Ok(())
+            } else {
+                Err(last("SetSuspendState"))
+            }
+        }
         Command::Restart => {
             enable_shutdown()?;
             exit_windows(EWX_REBOOT)
@@ -87,21 +92,27 @@ pub fn run(command: Command) -> Result<(), Error> {
 }
 
 fn exit_windows(flags: EXIT_WINDOWS_FLAGS) -> Result<(), Error> {
+    // SAFETY: takes plain flags and no pointers.
     unsafe { ExitWindowsEx(flags, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_FLAG_PLANNED) }
         .map_err(win32("ExitWindowsEx"))
 }
 
 /// Turns on the shutdown privilege, which every account holds but has off, as restart and shut down need.
 fn enable_shutdown() -> Result<(), Error> {
+    // SAFETY: returns a pseudo handle that needs no closing.
+    let process = unsafe { GetCurrentProcess() };
     let mut token = HANDLE::default();
-    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &mut token) }
+    // SAFETY: `process` is this process's pseudo handle and `token` a writable HANDLE.
+    unsafe { OpenProcessToken(process, TOKEN_ADJUST_PRIVILEGES, &mut token) }
         .map_err(win32("OpenProcessToken"))?;
+    // SAFETY: `OpenProcessToken` succeeded, so `token` is an open handle nothing else closes.
     let token = unsafe { Owned::new(token) };
     enable(*token, SE_SHUTDOWN_NAME)
 }
 
 fn enable(token: HANDLE, privilege: windows::core::PCWSTR) -> Result<(), Error> {
     let mut luid = LUID::default();
+    // SAFETY: `privilege` is a static NUL-terminated name and `luid` a writable LUID.
     unsafe { LookupPrivilegeValueW(None, privilege, &mut luid) }
         .map_err(win32("LookupPrivilegeValueW"))?;
     let privileges = TOKEN_PRIVILEGES {
@@ -111,9 +122,11 @@ fn enable(token: HANDLE, privilege: windows::core::PCWSTR) -> Result<(), Error> 
             Attributes: SE_PRIVILEGE_ENABLED,
         }],
     };
+    // SAFETY: `token` is open with TOKEN_ADJUST_PRIVILEGES, and with no previous-state buffer its length is 0.
     unsafe { AdjustTokenPrivileges(token, false, Some(&privileges), 0, None, None) }
         .map_err(win32("AdjustTokenPrivileges"))?;
     // It succeeds without enabling a privilege the account lacks, and says so only in the last error.
+    // SAFETY: reads this thread's last error, set by the call just above.
     match unsafe { GetLastError() } {
         ERROR_NOT_ALL_ASSIGNED => Err(last("AdjustTokenPrivileges")),
         _ => Ok(()),

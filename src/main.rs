@@ -15,7 +15,7 @@ use carronade::files;
 use carronade::history::{self, Use};
 use carronade::menu::Choice;
 use carronade::picker::{Action, Picture, Row, Step, browse, pick};
-use carronade::store;
+use carronade::store::{self, UnixSeconds};
 use carronade::system::{self, Command};
 use windows::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MessageBoxW};
@@ -152,7 +152,7 @@ struct Settings {
     terminal: String,
     apps_icon: String,
     files_icon: String,
-    now: u64,
+    now: UnixSeconds,
     recent_apps: Vec<Use>,
     recent_files: Vec<Use>,
     app_boosts: HashMap<String, i32>,
@@ -180,12 +180,12 @@ impl Found {
         Ok(match kind {
             Kind::Apps => {
                 if self.apps.is_none() {
-                    self.apps = Some(cached(
-                        settings.apps_cache,
-                        apps::cache_path,
-                        apps::load,
-                        apps::list,
-                    )?);
+                    let last = if settings.apps_cache {
+                        apps::load(&apps::cache_path()?)?
+                    } else {
+                        None
+                    };
+                    self.apps = Some(last.map_or_else(apps::list, Ok)?);
                 }
                 let apps = self
                     .apps
@@ -196,13 +196,12 @@ impl Found {
             }
             Kind::Files => {
                 if self.files.is_none() {
-                    let list = || files::list(&settings.roots);
-                    self.files = Some(cached(
-                        settings.files_cache,
-                        files::cache_path,
-                        files::load,
-                        list,
-                    )?);
+                    let last = if settings.files_cache {
+                        files::load(&files::cache_path()?)?
+                    } else {
+                        None
+                    };
+                    self.files = Some(last.map_or_else(|| files::list(&settings.roots), Ok)?);
                 }
                 self.files
                     .iter()
@@ -221,20 +220,6 @@ fn boost(boosts: &HashMap<String, i32>, key: &str) -> i32 {
     boosts.get(key).copied().unwrap_or(0)
 }
 
-/// What `list` found last time when `cache` is on and there was a last time, else what it finds now.
-fn cached<T>(
-    cache: bool,
-    path: fn() -> Result<PathBuf, Error>,
-    load: fn(&Path) -> Result<Option<Vec<T>>, Error>,
-    list: impl Fn() -> Result<Vec<T>, Error>,
-) -> Result<Vec<T>, Error> {
-    let last = match cache {
-        true => load(&path()?)?,
-        false => None,
-    };
-    last.map_or_else(list, Ok)
-}
-
 /// What a search ends with.
 enum Picked {
     Open(Choice<Item>),
@@ -246,7 +231,8 @@ enum Picked {
 
 /// Opens the pick from apps and files, starting on `start`: launches an app, elevated or not, runs a system command,
 /// opens a file or folder, recording each app and entry opened in its history, starts the terminal in an entry's
-/// folder, or runs the typed text as the Run dialog would. Returns whether there was a pick, which a declined UAC prompt is not.
+/// folder, or runs the typed text as the Run dialog would. Returns whether there was a pick, which a declined UAC
+/// prompt is not.
 fn search(config: Config, start: Kind) -> Result<bool, Error> {
     let apps_history = history::apps_path()?;
     let files_history = history::files_path()?;
@@ -283,9 +269,9 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
                 }
             }
             Action::Terminal(Item::Entry(entry, _)) => Step::Done(Picked::Terminal(entry)),
-            Action::Terminal(Item::App(..) | Item::Command(_)) => Step::Stay,
             Action::Admin(Item::App(app, _)) => Step::Done(Picked::Admin(app)),
-            Action::Admin(Item::Command(_) | Item::Entry(..)) => Step::Stay,
+            Action::Terminal(Item::App(..) | Item::Command(_))
+            | Action::Admin(Item::Command(_) | Item::Entry(..)) => Step::Stay,
         })
     })?;
     let picked = match choice {
@@ -342,9 +328,11 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
 /// Writes to stderr when the caller gave one, else shows a message box: started from a hotkey, nothing reads stderr.
 fn report(error: &dyn std::error::Error) {
     let text = chain(error);
+    // SAFETY: reads this process's standard handle and takes no ownership of it.
     match unsafe { GetStdHandle(STD_ERROR_HANDLE) } {
         Ok(handle) if !handle.is_invalid() => eprintln!("carronade: {text}"),
         _ => {
+            // SAFETY: the text is a temporary HSTRING and the caption a static wide string, both outliving the call.
             unsafe { MessageBoxW(None, &HSTRING::from(text), w!("carronade"), MB_ICONERROR) };
         }
     }

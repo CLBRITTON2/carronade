@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Imaging::{
 
 use crate::apps;
 use crate::error::{Error, win32};
-use crate::store;
+use crate::store::{self, UnixSeconds};
 
 /// A `side` px square icon as rows of 32-bit premultiplied BGRA.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,8 +24,8 @@ pub struct Pixels {
 pub struct Cached {
     /// What `apps::display_icon` was asked for.
     pub target: String,
-    /// When the shell gave it, in seconds since the Unix epoch.
-    pub fetched: u64,
+    /// When the shell gave it.
+    pub fetched: UnixSeconds,
     pub pixels: Pixels,
 }
 
@@ -58,11 +58,16 @@ pub fn save(path: &Path, icons: &[Cached]) -> Result<(), Error> {
 }
 
 /// The cached icon for `target` at `side` px, unless it is older than `MAX_AGE` at `now`.
-pub fn find<'a>(icons: &'a [Cached], target: &str, side: u32, now: u64) -> Option<&'a Pixels> {
+pub fn find<'a>(
+    icons: &'a [Cached],
+    target: &str,
+    side: u32,
+    now: UnixSeconds,
+) -> Option<&'a Pixels> {
     icons
         .iter()
         .find(|icon| icon.target == target)
-        .filter(|icon| icon.pixels.side == side && now.saturating_sub(icon.fetched) < MAX_AGE)
+        .filter(|icon| icon.pixels.side == side && now.since(icon.fetched) < MAX_AGE)
         .map(|icon| &icon.pixels)
 }
 
@@ -79,8 +84,10 @@ pub fn merged(fetched: Vec<Cached>, previous: Vec<Cached>) -> Vec<Cached> {
 
 /// The shell's icon for `target`, scaled to `side` px.
 pub fn fetch(wic: &IWICImagingFactory, target: &str, side: u32) -> Result<Pixels, Error> {
+    // An icon side is tens of px.
     let icon = apps::display_icon(target, side as i32)?;
     let pixels = scaled(wic, icon, side);
+    // SAFETY: `icon` came from `display_icon`, this function owns it, and `scaled` copied its pixels already.
     unsafe { DeleteObject(icon.into()) }
         .ok()
         .map_err(win32("DeleteObject"))?;
@@ -88,11 +95,14 @@ pub fn fetch(wic: &IWICImagingFactory, target: &str, side: u32) -> Result<Pixels
 }
 
 fn scaled(wic: &IWICImagingFactory, icon: HBITMAP, side: u32) -> Result<Pixels, Error> {
+    // SAFETY: `icon` is a live bitmap the caller owns until this returns, and a 32-bit one needs no palette.
     let bitmap = unsafe {
         wic.CreateBitmapFromHBITMAP(icon, HPALETTE::default(), WICBitmapUsePremultipliedAlpha)
     }
     .map_err(win32("CreateBitmapFromHBITMAP"))?;
+    // SAFETY: `wic` is a live factory on this thread.
     let scaler = unsafe { wic.CreateBitmapScaler() }.map_err(win32("CreateBitmapScaler"))?;
+    // SAFETY: `bitmap` and `scaler` are live WIC objects from the same factory.
     unsafe {
         scaler.Initialize(
             &bitmap,
@@ -102,7 +112,9 @@ fn scaled(wic: &IWICImagingFactory, icon: HBITMAP, side: u32) -> Result<Pixels, 
         )
     }
     .map_err(win32("IWICBitmapScaler::Initialize"))?;
+    // u32 to usize widens on the only target, 64-bit Windows.
     let mut bgra = vec![0; side as usize * side as usize * 4];
+    // SAFETY: a null rect copies the whole `side` square, which fills `bgra` exactly at a stride of `side * 4`.
     unsafe { scaler.CopyPixels(std::ptr::null(), side * 4, &mut bgra) }
         .map_err(win32("IWICBitmapScaler::CopyPixels"))?;
     Ok(Pixels { side, bgra })
@@ -111,11 +123,12 @@ fn scaled(wic: &IWICImagingFactory, icon: HBITMAP, side: u32) -> Result<Pixels, 
 /// `MAGIC`, the count, then per icon: the target's length and UTF-8, `fetched`, `side`, and the pixels. Little-endian.
 pub(crate) fn encode(icons: &[Cached]) -> Vec<u8> {
     let mut bytes = MAGIC.to_vec();
+    // At most `LIMIT` icons, each target a shell path, so both lengths fit a u32.
     bytes.extend((icons.len() as u32).to_le_bytes());
     for icon in icons {
         bytes.extend((icon.target.len() as u32).to_le_bytes());
         bytes.extend(icon.target.as_bytes());
-        bytes.extend(icon.fetched.to_le_bytes());
+        bytes.extend(icon.fetched.0.to_le_bytes());
         bytes.extend(icon.pixels.side.to_le_bytes());
         bytes.extend(&icon.pixels.bgra);
     }
@@ -128,14 +141,15 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<Vec<Cached>> {
     let mut icons = Vec::new();
     for _ in 0..count {
         let (length, after) = u32_at(rest)?;
-        let (target, after) = after.split_at_checked(length as usize)?;
+        let (target, after) = after.split_at_checked(usize::try_from(length).ok()?)?;
         let (fetched, after) = after.split_first_chunk::<8>()?;
         let (side, after) = u32_at(after)?;
-        let size = (side as usize).checked_mul(side as usize)?.checked_mul(4)?;
+        let edge = usize::try_from(side).ok()?;
+        let size = edge.checked_mul(edge)?.checked_mul(4)?;
         let (bgra, after) = after.split_at_checked(size)?;
         icons.push(Cached {
             target: String::from_utf8(target.to_vec()).ok()?,
-            fetched: u64::from_le_bytes(*fetched),
+            fetched: UnixSeconds(u64::from_le_bytes(*fetched)),
             pixels: Pixels {
                 side,
                 bgra: bgra.to_vec(),
@@ -158,7 +172,7 @@ mod tests {
     fn icon(target: &str, fetched: u64, side: u32) -> Cached {
         Cached {
             target: target.to_owned(),
-            fetched,
+            fetched: UnixSeconds(fetched),
             pixels: Pixels {
                 side,
                 bgra: vec![7; side as usize * side as usize * 4],
@@ -185,12 +199,25 @@ mod tests {
     }
 
     #[test]
+    fn an_unreadable_cache_names_its_path() -> Result<(), std::io::Error> {
+        let path = std::env::temp_dir().join("carronade-icons-invalid.bin");
+        std::fs::write(&path, b"not icons")?;
+        let result = load(&path);
+        assert!(
+            matches!(&result, Err(Error::IconCache { path: failed }) if *failed == path),
+            "got {result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn find_skips_icons_of_another_size_or_too_old() {
         let icons = [icon("a", 100, 2)];
-        assert!(find(&icons, "a", 2, 100 + MAX_AGE - 1).is_some());
-        assert!(find(&icons, "a", 2, 100 + MAX_AGE).is_none());
-        assert!(find(&icons, "a", 3, 100).is_none());
-        assert!(find(&icons, "b", 2, 100).is_none());
+        let at = |seconds: u64| UnixSeconds(100 + seconds);
+        assert!(find(&icons, "a", 2, at(MAX_AGE - 1)).is_some());
+        assert!(find(&icons, "a", 2, at(MAX_AGE)).is_none());
+        assert!(find(&icons, "a", 3, at(0)).is_none());
+        assert!(find(&icons, "b", 2, at(0)).is_none());
     }
 
     #[test]
@@ -200,7 +227,10 @@ mod tests {
             vec![icon("a", 1, 1), icon("b", 1, 1)],
         );
         assert_eq!(targets(&merged), ["b", "c", "a"]);
-        assert_eq!(merged.first().map(|icon| icon.fetched), Some(9));
+        assert_eq!(
+            merged.first().map(|icon| icon.fetched),
+            Some(UnixSeconds(9))
+        );
     }
 
     #[test]

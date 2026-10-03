@@ -59,7 +59,7 @@ impl Picker {
         Ok(Self { child, window })
     }
 
-    /// Posts each UTF-16 unit as WM_CHAR. Posted, not sent, so it stays in order with `press`, as real typing does.
+    /// Posts each UTF-16 unit as `WM_CHAR`. Posted, not sent, so it stays in order with `press`, as real typing does.
     pub fn type_query(&self, text: &str) -> Outcome {
         for unit in text.encode_utf16() {
             self.post(WM_CHAR, usize::from(unit))?;
@@ -81,6 +81,7 @@ impl Picker {
     }
 
     fn post(&self, message: u32, wparam: usize) -> Outcome {
+        // SAFETY: posting copies the plain integer arguments, so a closed window only makes the call fail.
         unsafe { PostMessageW(Some(self.window), message, WPARAM(wparam), LPARAM(0)) }?;
         Ok(())
     }
@@ -108,9 +109,12 @@ fn picker_window(pid: u32) -> Result<HWND, Box<dyn Error>> {
     let start = Instant::now();
     while start.elapsed() < TIMEOUT {
         let mut after = None;
+        // SAFETY: the class name is a static wide string, and `after` is a window this search returned or none.
         while let Ok(window) = unsafe { FindWindowExW(None, after, w!("carronade"), None) } {
             let mut owner = 0;
+            // SAFETY: `owner` is a writable u32, and a window gone since the search only yields 0.
             unsafe { GetWindowThreadProcessId(window, Some(&mut owner)) };
+            // SAFETY: takes the window by value and only reads its style.
             if owner == pid && unsafe { IsWindowVisible(window) }.as_bool() {
                 return Ok(window);
             }

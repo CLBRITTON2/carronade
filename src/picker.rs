@@ -3,74 +3,55 @@
 
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
-use std::path::Path;
 
-use windows::Win32::Foundation::{
-    GENERIC_READ, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, SetLastError, WIN32_ERROR,
-    WPARAM,
-};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES,
-    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE,
-    D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Bitmap,
-    ID2D1BitmapBrush, ID2D1DCRenderTarget, ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
+    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Bitmap, ID2D1Factory,
+    ID2D1RenderTarget,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_HIT_TEST_METRICS, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS,
-    DWRITE_TEXT_RANGE, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteFontCollection,
-    IDWriteTextFormat, IDWriteTextLayout,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_TEXT_ALIGNMENT_CENTER, DWriteCreateFactory, IDWriteFactory,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
-    AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
-    CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, GetMonitorInfoW, HBITMAP, HDC,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SelectObject,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SelectObject,
 };
-use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
-    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut,
-    WICDecodeMetadataCacheOnDemand,
-};
+use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-use windows::Win32::System::DataExchange::{
-    CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
-use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI,
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VIRTUAL_KEY,
-    VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_N, VK_P,
-    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP, VK_V,
+    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
-    GetMessageW, IDC_ARROW, LoadCursorW, MSG, PostMessageW, RegisterClassW, SW_SHOW,
-    SetForegroundWindow, ShowWindow, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow, WA_INACTIVE,
-    WM_ACTIVATE, WM_APP, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DestroyWindow, DispatchMessageW, GetForegroundWindow, GetMessageW, IDC_ARROW,
+    LoadCursorW, MSG, PostMessageW, RegisterClassW, SW_SHOW, SetForegroundWindow, ShowWindow,
+    TranslateMessage, WM_APP, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
-use windows::core::{HSTRING, Owned, PCWSTR, w};
-use windows_numerics::Matrix3x2;
+use windows::core::{Owned, PCWSTR, w};
 
-use crate::apps;
-use crate::config::{Color, Config, Length};
+use crate::config::Config;
 use crate::error::{Error, last, win32};
 use crate::icons::{self, Cached, Pixels};
-use crate::layout::{self, Layout, Rect};
+use crate::layout::{self, Rect};
 use crate::menu::{self, Candidate, Choice, Line};
-use crate::store;
+use crate::platform;
+use crate::store::{self, UnixSeconds};
+use canvas::{Canvas, MemoryDc, d2d_color, d2d_rect, format, image, measure, rounded};
+
+mod canvas;
+mod clipboard;
+mod input;
 
 const CLASS: PCWSTR = w!("carronade");
 
@@ -141,9 +122,15 @@ enum Icon {
     Glyph(char),
 }
 
+/// What the picker keeps of an item.
+struct Listed {
+    candidate: Candidate,
+    icon: Option<Icon>,
+}
+
 struct State {
-    items: Vec<Candidate>,
-    icons: Vec<Option<Icon>>,
+    items: Vec<Listed>,
+    /// Indices into `items` of the matches, best first.
     shown: Vec<usize>,
     cursor: usize,
     line: Line,
@@ -160,42 +147,6 @@ struct State {
     /// The icons the shell gave this run, for `icons.bin` when the picker closes.
     fetched: Vec<Cached>,
     canvas: Canvas,
-}
-
-/// The window and everything that draws into it.
-struct Canvas {
-    window: HWND,
-    origin: POINT,
-    target: ID2D1DCRenderTarget,
-    brush: ID2D1SolidColorBrush,
-    /// The matched letters' color, its own brush since a text layout keeps the brush, not its color.
-    highlight: ID2D1SolidColorBrush,
-    dwrite: IDWriteFactory,
-    wic: IWICImagingFactory,
-    text: IDWriteTextFormat,
-    prompt: IDWriteTextFormat,
-    /// The prompt font, centered for the switch icon.
-    icon: IDWriteTextFormat,
-    /// `GLYPH_FONT`, centered in a row's icon box.
-    glyph: IDWriteTextFormat,
-    image: Option<ID2D1BitmapBrush>,
-    layout: Layout,
-    config: Config,
-    em: f32,
-    scale: f32,
-    // Fields drop in order: `target` draws into `dc`, and `dib` cannot be deleted while `dc` holds it.
-    dc: MemoryDc,
-    #[expect(dead_code, reason = "held only so drop deletes it")]
-    dib: Owned<HBITMAP>,
-}
-
-/// A `CreateCompatibleDC` device context, deleted on drop. Drop cannot report a failed `DeleteDC`.
-struct MemoryDc(HDC);
-
-impl Drop for MemoryDc {
-    fn drop(&mut self) {
-        _ = unsafe { DeleteDC(self.0) };
-    }
 }
 
 // Win32 and shell calls re-enter the window procedure, so every borrow ends before the next call that can.
@@ -222,8 +173,9 @@ pub fn browse<T: Row + Clone, R>(
     switch: Option<String>,
     next: impl FnMut(Action<T>) -> Result<Step<T, R>, Error>,
 ) -> Result<R, Error> {
-    let window = open(config, rows(&items), switch)?;
+    let window = open(config, listed(&items), switch)?;
     let choice = steps(items, next);
+    // SAFETY: `open` created `window` on this thread and nothing destroyed it since.
     unsafe { DestroyWindow(window) }.map_err(win32("DestroyWindow"))?;
     // Released now: a COM object released by the thread-local destructors at exit changes the exit code.
     let icons = STATE.take().map(|state| (state.fetched, state.cache));
@@ -259,8 +211,8 @@ fn steps<T: Row + Clone, R>(
                 items: shown,
                 switch,
             } => {
-                let rows = rows(&shown);
-                with(|state| state.show(rows, switch))?;
+                let listed = listed(&shown);
+                with(|state| state.show(listed, switch))?;
                 items = shown;
                 render()?;
             }
@@ -269,32 +221,25 @@ fn steps<T: Row + Clone, R>(
     }
 }
 
-/// What the picker keeps of each item, by index.
-struct Rows {
-    candidates: Vec<Candidate>,
-    icons: Vec<Option<Icon>>,
-}
-
-fn rows<T: Row>(items: &[T]) -> Rows {
-    Rows {
-        candidates: items
-            .iter()
-            .map(|item| Candidate {
+fn listed<T: Row>(items: &[T]) -> Vec<Listed> {
+    items
+        .iter()
+        .map(|item| Listed {
+            candidate: Candidate {
                 label: item.label().to_owned(),
                 alias: item.alias().map(str::to_owned),
                 boost: item.boost(),
-            })
-            .collect(),
-        icons: items
-            .iter()
-            .map(|item| {
-                item.icon().map(|picture| match picture {
-                    Picture::Shell(target) => Icon::Unloaded(target),
-                    Picture::Glyph(glyph) => Icon::Glyph(glyph),
-                })
-            })
-            .collect(),
-    }
+            },
+            icon: item.icon().map(|picture| match picture {
+                Picture::Shell(target) => Icon::Unloaded(target),
+                Picture::Glyph(glyph) => Icon::Glyph(glyph),
+            }),
+        })
+        .collect()
+}
+
+fn candidates(items: &[Listed]) -> impl Iterator<Item = &Candidate> {
+    items.iter().map(|item| &item.candidate)
 }
 
 /// Dispatches messages until one leads to an action. It returns right after that message, so keys typed later reach
@@ -305,50 +250,63 @@ fn pump() -> Result<Action<usize>, Error> {
         if let Some(outcome) = OUTCOME.take() {
             return outcome;
         }
+        // SAFETY: `message` is a live local the call fills.
         match unsafe { GetMessageW(&mut message, None, 0, 0) }.0 {
             -1 => return Err(last("GetMessageW")),
             0 => return Err(Error::NoChoice),
             _ => {}
         }
-        unsafe {
-            _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
+        // SAFETY: `message` is the one GetMessageW just filled.
+        _ = unsafe { TranslateMessage(&message) };
+        // SAFETY: as above, and the window procedure it reaches runs on this thread.
+        unsafe { DispatchMessageW(&message) };
     }
 }
 
-fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Error> {
+fn open(config: Config, items: Vec<Listed>, switch: Option<String>) -> Result<HWND, Error> {
+    // SAFETY: takes a predefined context constant and runs before this process creates a window.
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
         .map_err(win32("SetProcessDpiAwarenessContext"))?;
-    let monitor = unsafe { MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST) };
+    // SAFETY: takes no arguments, and a null result is a valid input to MonitorFromWindow.
+    let foreground = unsafe { GetForegroundWindow() };
+    // SAFETY: MONITOR_DEFAULTTONEAREST returns a monitor for any window, a stale one included.
+    let monitor = unsafe { MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST) };
     let mut info = MONITORINFO {
         cbSize: size_of::<MONITORINFO>() as u32,
         ..Default::default()
     };
+    // SAFETY: `monitor` came from MonitorFromWindow and `info` is a local with `cbSize` set.
     unsafe { GetMonitorInfoW(monitor, &mut info) }
         .ok()
         .map_err(win32("GetMonitorInfoW"))?;
     let (mut dpi, mut dpi_y) = (0, 0);
+    // SAFETY: `monitor` came from MonitorFromWindow and both outputs are live locals.
     unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y) }
         .map_err(win32("GetDpiForMonitor"))?;
+    // A DPI is in the hundreds, exact in f32.
     let scale = dpi as f32 / 96.0;
     let em = config.font.size * dpi as f32 / 72.0;
 
-    apps::com()?;
+    platform::com()?;
+    // SAFETY: the single-threaded factory is used only on this thread, and no debug options are passed.
     let d2d: ID2D1Factory = unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
         .map_err(win32("D2D1CreateFactory"))?;
+    // SAFETY: takes only a factory type constant.
     let dwrite: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
         .map_err(win32("DWriteCreateFactory"))?;
+    // SAFETY: `platform::com` initialized COM on this thread above.
     let wic: IWICImagingFactory =
         unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
             .map_err(win32("CoCreateInstance(WICImagingFactory)"))?;
     let text = format(&dwrite, &config.font.family, em)?;
     let prompt = format(&dwrite, &config.input.prompt_font, em)?;
     let icon = format(&dwrite, &config.input.prompt_font, em)?;
+    // SAFETY: `icon` is a live text format and the alignment a defined constant.
     unsafe { icon.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) }
         .map_err(win32("SetTextAlignment"))?;
     // Its glyphs fill most of the em square, while shell icons leave a margin inside theirs.
     let glyph = format(&dwrite, GLYPH_FONT, config.element.icon.px(em, scale) * 0.6)?;
+    // SAFETY: `glyph` is a live text format and the alignment a defined constant.
     unsafe { glyph.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) }
         .map_err(win32("SetTextAlignment"))?;
     let typed = measure(&dwrite, &text, &config.input.placeholder)?;
@@ -365,23 +323,29 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
         apps_icon.width.max(files_icon.width),
     );
 
+    // SAFETY: a null name asks for this exe's own module, which lives as long as the process.
     let instance = unsafe { GetModuleHandleW(None) }.map_err(win32("GetModuleHandleW"))?;
+    // SAFETY: IDC_ARROW is a predefined system cursor, which needs no instance.
+    let cursor = unsafe { LoadCursorW(None, IDC_ARROW) }.map_err(win32("LoadCursorW"))?;
     let class = WNDCLASSW {
-        lpfnWndProc: Some(window_proc),
+        lpfnWndProc: Some(input::window_proc),
         hInstance: instance.into(),
-        hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.map_err(win32("LoadCursorW"))?,
+        hCursor: cursor,
         lpszClassName: CLASS,
         ..Default::default()
     };
+    // SAFETY: `class` is filled in, and `CLASS` is a static wide string that outlives the registration.
     if unsafe { RegisterClassW(&class) } == 0 {
         return Err(last("RegisterClassW"));
     }
+    // Whole pixels from `ceil`, a screen's size at most.
     let (width, height) = (layout.width as i32, layout.height as i32);
     let work = info.rcWork;
     let origin = POINT {
         x: work.left + (work.right - work.left - width) / 2,
         y: work.top + (work.bottom - work.top - height) / 2,
     };
+    // SAFETY: `CLASS` was registered above with this `instance`, and no creation data is passed.
     let window = unsafe {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -416,16 +380,18 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
     };
     let mut bits = std::ptr::null_mut();
     // Created before `dc`, so on an early return `dc` drops first and releases it. DIB_RGB_COLORS needs no DC.
-    let dib = unsafe {
-        Owned::new(
-            CreateDIBSection(None, &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0)
-                .map_err(win32("CreateDIBSection"))?,
-        )
-    };
+    // SAFETY: `bitmap_info` describes a 32-bit DIB and `bits` is a live local the call fills.
+    let section =
+        unsafe { CreateDIBSection(None, &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0) }
+            .map_err(win32("CreateDIBSection"))?;
+    // SAFETY: `section` is a fresh bitmap nothing else owns, so `Owned` deletes it once.
+    let dib = unsafe { Owned::new(section) };
+    // SAFETY: a null DC asks for one compatible with the screen.
     let dc = MemoryDc(unsafe { CreateCompatibleDC(None) });
     if dc.0.is_invalid() {
         return Err(last("CreateCompatibleDC"));
     }
+    // SAFETY: both handles are valid, and `dc` drops before `dib`, so the bitmap is never deleted while selected.
     if unsafe { SelectObject(dc.0, (*dib).into()) }.is_invalid() {
         return Err(last("SelectObject"));
     }
@@ -441,6 +407,7 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
         usage: D2D1_RENDER_TARGET_USAGE_NONE,
         minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
     };
+    // SAFETY: `properties` is a filled-in local that outlives the call.
     let target =
         unsafe { d2d.CreateDCRenderTarget(&properties) }.map_err(win32("CreateDCRenderTarget"))?;
     let bounds = RECT {
@@ -449,11 +416,15 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
         right: width,
         bottom: height,
     };
+    // SAFETY: `dc` holds the DIB the size of `bounds`, and the canvas keeps both alive as long as `target`.
     unsafe { target.BindDC(dc.0, &bounds) }.map_err(win32("ID2D1DCRenderTarget::BindDC"))?;
     // ClearType needs an opaque background to blend against.
+    // SAFETY: `target` is live and the mode a defined constant.
     unsafe { target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE) };
+    // SAFETY: `target` is live and the color a local that outlives the call.
     let brush = unsafe { target.CreateSolidColorBrush(&d2d_color(config.input.color), None) }
         .map_err(win32("CreateSolidColorBrush"))?;
+    // SAFETY: as for `brush`.
     let highlight =
         unsafe { target.CreateSolidColorBrush(&d2d_color(config.element.highlight), None) }
             .map_err(win32("CreateSolidColorBrush"))?;
@@ -463,9 +434,8 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
     };
 
     STATE.set(Some(State {
-        shown: menu::filter(&rows.candidates, ""),
-        items: rows.candidates,
-        icons: rows.icons,
+        shown: menu::filter(candidates(&items), ""),
+        items,
         cursor: 0,
         line: Line::default(),
         switch,
@@ -497,403 +467,42 @@ fn open(config: Config, rows: Rows, switch: Option<String>) -> Result<HWND, Erro
     }));
     // The first frame goes up without icons, which take tens of ms each to load.
     with(State::draw)??;
-    unsafe {
-        _ = ShowWindow(window, SW_SHOW);
-        // The foreground lock admits only the process that got the last input, so inject a zero-length mouse move.
-        let nudge = INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 {
-                mi: MOUSEINPUT {
-                    dwFlags: MOUSEEVENTF_MOVE,
-                    ..Default::default()
-                },
+    // SAFETY: `window` was created above on this thread.
+    _ = unsafe { ShowWindow(window, SW_SHOW) };
+    // The foreground lock admits only the process that got the last input, so inject a zero-length mouse move.
+    let nudge = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dwFlags: MOUSEEVENTF_MOVE,
+                ..Default::default()
             },
-        };
-        if SendInput(&[nudge], size_of::<INPUT>() as i32) != 1 {
-            return Err(last("SendInput"));
-        }
-        if !SetForegroundWindow(window).as_bool() {
-            return Err(Error::Foreground);
-        }
+        },
+    };
+    // SAFETY: `nudge` is a mouse input with the `mi` member set, and the size passed is that of `INPUT`.
+    if unsafe { SendInput(&[nudge], size_of::<INPUT>() as i32) } != 1 {
+        return Err(last("SendInput"));
+    }
+    // SAFETY: `window` was created above on this thread.
+    if !unsafe { SetForegroundWindow(window) }.as_bool() {
+        return Err(Error::Foreground);
     }
     render()?;
     Ok(window)
 }
 
-/// A single-line text format of `family` at `size` px that ends overlong text with an ellipsis.
-fn format(dwrite: &IDWriteFactory, family: &str, size: f32) -> Result<IDWriteTextFormat, Error> {
-    let mut fonts: Option<IDWriteFontCollection> = None;
-    unsafe { dwrite.GetSystemFontCollection(&mut fonts, false) }
-        .map_err(win32("GetSystemFontCollection"))?;
-    let (mut index, mut exists) = (0, false.into());
-    let name = HSTRING::from(family);
-    if let Some(fonts) = fonts {
-        unsafe { fonts.FindFamilyName(&name, &mut index, &mut exists) }
-            .map_err(win32("IDWriteFontCollection::FindFamilyName"))?;
-    }
-    if !exists.as_bool() {
-        return Err(Error::Font(family.to_owned()));
-    }
-    let format = unsafe {
-        dwrite.CreateTextFormat(
-            &name,
-            None,
-            DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            size,
-            w!("en-us"),
-        )
-    }
-    .map_err(win32("CreateTextFormat"))?;
-    let ellipsis = unsafe { dwrite.CreateEllipsisTrimmingSign(&format) }
-        .map_err(win32("CreateEllipsisTrimmingSign"))?;
-    let trimming = DWRITE_TRIMMING {
-        granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-        delimiter: 0,
-        delimiterCount: 0,
-    };
-    unsafe {
-        format
-            .SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)
-            .map_err(win32("SetWordWrapping"))?;
-        format
-            .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)
-            .map_err(win32("SetParagraphAlignment"))?;
-        format
-            .SetTrimming(&trimming, &ellipsis)
-            .map_err(win32("SetTrimming"))?;
-    }
-    Ok(format)
-}
-
-/// `text` in `format`, unbounded so nothing trims it, with its box `height` tall.
-fn text_layout(
-    dwrite: &IDWriteFactory,
-    format: &IDWriteTextFormat,
-    text: &str,
-    height: f32,
-) -> Result<IDWriteTextLayout, Error> {
-    let units: Vec<u16> = text.encode_utf16().collect();
-    unsafe { dwrite.CreateTextLayout(&units, format, f32::MAX, height) }
-        .map_err(win32("CreateTextLayout"))
-}
-
-fn measure(
-    dwrite: &IDWriteFactory,
-    format: &IDWriteTextFormat,
-    text: &str,
-) -> Result<DWRITE_TEXT_METRICS, Error> {
-    let layout = text_layout(dwrite, format, text, 0.0)?;
-    let mut metrics = DWRITE_TEXT_METRICS::default();
-    unsafe { layout.GetMetrics(&mut metrics) }.map_err(win32("IDWriteTextLayout::GetMetrics"))?;
-    Ok(metrics)
-}
-
-/// The picture at `path` as a brush that covers a `width` by `height` window, cropping what overflows.
-fn image(
-    wic: &IWICImagingFactory,
-    target: &ID2D1RenderTarget,
-    path: &Path,
-    width: f32,
-    height: f32,
-) -> Result<ID2D1BitmapBrush, Error> {
-    let failed = |source| Error::Image {
-        path: path.to_owned(),
-        source,
-    };
-    let brush = unsafe {
-        let decoder = wic
-            .CreateDecoderFromFilename(
-                &HSTRING::from(path),
-                None,
-                GENERIC_READ,
-                WICDecodeMetadataCacheOnDemand,
-            )
-            .map_err(failed)?;
-        let frame = decoder.GetFrame(0).map_err(failed)?;
-        let (mut source_width, mut source_height) = (0, 0);
-        frame
-            .GetSize(&mut source_width, &mut source_height)
-            .map_err(failed)?;
-        // Decoded straight to the size it covers the window at: a photo at full size is tens of MB and slow to decode.
-        let zoom = (width / source_width as f32).max(height / source_height as f32);
-        let scaler = wic.CreateBitmapScaler().map_err(failed)?;
-        scaler
-            .Initialize(
-                &frame,
-                (source_width as f32 * zoom).ceil() as u32,
-                (source_height as f32 * zoom).ceil() as u32,
-                WICBitmapInterpolationModeFant,
-            )
-            .map_err(failed)?;
-        let converter = wic.CreateFormatConverter().map_err(failed)?;
-        converter
-            .Initialize(
-                &scaler,
-                &GUID_WICPixelFormat32bppPBGRA,
-                WICBitmapDitherTypeNone,
-                None,
-                0.0,
-                WICBitmapPaletteTypeMedianCut,
-            )
-            .map_err(failed)?;
-        let bitmap = target
-            .CreateBitmapFromWicBitmap(&converter, None)
-            .map_err(failed)?;
-        let brush = target
-            .CreateBitmapBrush(&bitmap, None, None)
-            .map_err(failed)?;
-        let size = bitmap.GetSize();
-        // Centered on whole pixels, so the bitmap is copied rather than resampled.
-        brush.SetTransform(&Matrix3x2::translation(
-            ((width - size.width) / 2.0).round(),
-            ((height - size.height) / 2.0).round(),
-        ));
-        brush
-    };
-    Ok(brush)
-}
-
-extern "system" fn window_proc(
-    window: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    let result = match message {
-        WM_KEYDOWN => match key(VIRTUAL_KEY(wparam.0 as u16)) {
-            Ok(false) => return unsafe { DefWindowProcW(window, message, wparam, lparam) },
-            handled => handled.map(|_| ()),
-        },
-        WM_CHAR => typed(wparam.0 as u16),
-        WM_LBUTTONDOWN => {
-            let (x, y) = client(lparam);
-            clicked(f32::from(x), f32::from(y))
-        }
-        WM_MOUSEMOVE => hovered(client(lparam)),
-        // The high word is the signed turn.
-        WM_MOUSEWHEEL => scrolled((wparam.0 >> 16) as i16),
-        WM_ACTIVATE if (wparam.0 & 0xffff) as u32 == WA_INACTIVE => {
-            finish(Ok(Action::Pick(Choice::Cancel)))
-        }
-        _ => return unsafe { DefWindowProcW(window, message, wparam, lparam) },
-    };
-    if let Err(error) = result {
-        // Only the wake-up can fail here, and the error is recorded before it, so `pump` still returns it.
-        _ = finish(Err(error));
-    }
-    LRESULT(0)
-}
-
-/// Handles the keys that steer the picker or edit the query, returning false for the rest.
-fn key(key: VIRTUAL_KEY) -> Result<bool, Error> {
-    let ctrl = held(VK_CONTROL);
-    let shift = held(VK_SHIFT);
-    match key {
-        VK_ESCAPE => finish(Ok(Action::Pick(Choice::Cancel)))?,
-        VK_RETURN if ctrl => {
-            if let Some(row) = with(|state| state.shown.get(state.cursor).copied())? {
-                finish(Ok(match shift {
-                    true => Action::Admin(row),
-                    false => Action::Terminal(row),
-                }))?;
-            }
-        }
-        VK_RETURN => {
-            let choice = with(|state| {
-                let query = state.line.text();
-                match shift {
-                    true => menu::typed(&query),
-                    false => menu::accept(&state.shown, state.cursor, &query),
-                }
-            })?;
-            finish(Ok(Action::Pick(choice)))?;
-        }
-        VK_TAB if with(|state| state.switch.is_some())? => finish(Ok(Action::Switch))?,
-        VK_DOWN => move_by(1)?,
-        VK_UP => move_by(-1)?,
-        VK_N if ctrl => move_by(1)?,
-        VK_P if ctrl => move_by(-1)?,
-        VK_BACK if ctrl => edit(Line::delete_word)?,
-        VK_BACK => edit(Line::backspace)?,
-        VK_DELETE => edit(Line::delete)?,
-        VK_LEFT if with(|state| state.line.before.is_empty())? => {
-            move_to(|state| menu::column_left(state.cursor, state.canvas.config.list.lines))?
-        }
-        VK_RIGHT if with(|state| state.line.after.is_empty())? => move_to(|state| {
-            let lines = state.canvas.config.list.lines;
-            menu::column_right(state.cursor, state.shown.len(), lines)
-        })?,
-        VK_LEFT => edit(Line::left)?,
-        VK_RIGHT => edit(Line::right)?,
-        VK_HOME => edit(Line::home)?,
-        VK_END => edit(Line::end)?,
-        VK_V if ctrl => {
-            let pasted = clipboard()?;
-            edit(|line| line.insert(&pasted))?;
-        }
-        _ => return Ok(false),
-    }
-    Ok(true)
-}
-
-/// Inserts a typed UTF-16 unit. Control characters, which Backspace and Enter also type, insert nothing.
-fn typed(unit: u16) -> Result<(), Error> {
-    let units = with(|state| match (state.surrogate.take(), unit) {
-        (_, 0xd800..=0xdbff) => {
-            state.surrogate = Some(unit);
-            Vec::new()
-        }
-        (Some(high), _) => vec![high, unit],
-        (None, _) => vec![unit],
-    })?;
-    let text = String::from_utf16(&units)?;
-    edit(|line| line.insert(&text))
-}
-
-/// Applies `change` to the query, filtering again when its text changed.
-fn edit(change: impl FnOnce(&Line) -> Line) -> Result<(), Error> {
-    with(|state| {
-        let line = change(&state.line);
-        if line.text() != state.line.text() {
-            state.shown = menu::filter(&state.items, &line.text());
-            state.cursor = 0;
-        }
-        state.line = line;
-    })?;
-    render()
-}
-
-fn move_by(by: isize) -> Result<(), Error> {
-    move_to(|state| menu::step(state.cursor, state.shown.len(), by))
-}
-
-fn move_to(cursor: impl FnOnce(&State) -> usize) -> Result<(), Error> {
-    with(|state| state.cursor = cursor(state))?;
-    render()
-}
-
-fn scrolled(delta: i16) -> Result<(), Error> {
-    with(|state| {
-        let scroll = menu::scroll(state.wheel, i32::from(delta));
-        state.wheel = scroll.pending;
-        state.cursor = menu::clamped(state.cursor, state.shown.len(), scroll.rows);
-    })?;
-    render()
-}
-
-/// The low and high words of a mouse message's `lparam`, its signed client coordinates.
-fn client(lparam: LPARAM) -> (i16, i16) {
-    (lparam.0 as i16, (lparam.0 >> 16) as i16)
-}
-
-/// Selects the match under the pointer. Windows also sends a move without one when the window appears under a
-/// resting pointer or redraws, so only a change from the last known position counts.
-fn hovered(at: (i16, i16)) -> Result<(), Error> {
-    let moved = with(|state| {
-        let last = state.pointer.replace(at);
-        if last.is_none_or(|last| last == at) {
-            return false;
-        }
-        let row = state
-            .canvas
-            .layout
-            .cell_at(f32::from(at.0), f32::from(at.1))
-            .map(|slot| menu::first(state.cursor, state.page()) + slot)
-            .filter(|&row| row < state.shown.len() && row != state.cursor);
-        if let Some(row) = row {
-            state.cursor = row;
-        }
-        row.is_some()
-    })?;
-    match moved {
-        true => render(),
-        false => Ok(()),
-    }
-}
-
-fn clicked(x: f32, y: f32) -> Result<(), Error> {
-    if with(|state| state.switch.is_some() && state.canvas.layout.on_switch(x, y))? {
-        return finish(Ok(Action::Switch));
-    }
-    let choice = with(|state| {
-        let slot = state.canvas.layout.cell_at(x, y)?;
-        let row = menu::first(state.cursor, state.page()) + slot;
-        state
-            .shown
-            .get(row)
-            .map(|_| menu::accept(&state.shown, row, ""))
-    })?;
-    match choice {
-        Some(choice) => finish(Ok(Action::Pick(choice))),
-        None => Ok(()),
-    }
-}
-
-/// The clipboard's text, or nothing when it holds none.
-fn clipboard() -> Result<String, Error> {
-    let format = u32::from(CF_UNICODETEXT.0);
-    // It returns false both for no text and for a failure, and sets the last error only for a failure.
-    unsafe { SetLastError(WIN32_ERROR(0)) };
-    if let Err(error) = unsafe { IsClipboardFormatAvailable(format) } {
-        if error.code().is_ok() {
-            return Ok(String::new());
-        }
-        return Err(win32("IsClipboardFormatAvailable")(error));
-    }
-    unsafe { OpenClipboard(None) }.map_err(win32("OpenClipboard"))?;
-    let text = clipboard_text(format);
-    let closed = unsafe { CloseClipboard() }.map_err(win32("CloseClipboard"));
-    // A failed read is the cause, so it wins over a failed close.
-    let text = text?;
-    closed?;
-    Ok(text)
-}
-
-fn clipboard_text(format: u32) -> Result<String, Error> {
-    let handle = unsafe { GetClipboardData(format) }.map_err(win32("GetClipboardData"))?;
-    let global = HGLOBAL(handle.0);
-    let data = unsafe { GlobalLock(global) }.cast::<u16>();
-    if data.is_null() {
-        return Err(last("GlobalLock"));
-    }
-    // SAFETY: `data` came from GlobalLock on `global`, which stays locked until GlobalUnlock below.
-    let text = unsafe { locked_text(global, data) };
-    // GlobalUnlock reports releasing the last lock as a failure, so its result says nothing.
-    _ = unsafe { GlobalUnlock(global) };
-    text
-}
-
-/// The text up to the first NUL in the locked `data`, within its block: another program can set one without a NUL.
-///
-/// # Safety
-///
-/// `data` must be the pointer `GlobalLock` returned for `global`, and the block must stay locked for the call.
-unsafe fn locked_text(global: HGLOBAL, data: *const u16) -> Result<String, Error> {
-    let units = unsafe { GlobalSize(global) } / size_of::<u16>();
-    if units == 0 {
-        return Err(last("GlobalSize"));
-    }
-    let block = unsafe { std::slice::from_raw_parts(data, units) };
-    let text = match block.iter().position(|&unit| unit == 0) {
-        Some(len) => block.split_at(len).0,
-        None => block,
-    };
-    Ok(String::from_utf16(text)?)
-}
-
 /// Records the outcome for `pump`, keeping the first when two arrive before it looks.
 fn finish(outcome: Result<Action<usize>, Error>) -> Result<(), Error> {
-    let first = OUTCOME.with_borrow_mut(|slot| match slot {
-        Some(_) => false,
-        None => {
-            *slot = Some(outcome);
-            true
+    let first = OUTCOME.with_borrow_mut(|slot| {
+        if slot.is_some() {
+            return false;
         }
+        *slot = Some(outcome);
+        true
     });
     if first {
         // A thread message: `pump` stays in GetMessageW after a sent message such as WM_ACTIVATE until one arrives.
+        // SAFETY: a null window posts to this thread's queue, and WM_APP carries no pointers.
         unsafe { PostMessageW(None, WM_APP, WPARAM(0), LPARAM(0)) }
             .map_err(win32("PostMessageW"))?;
     }
@@ -919,19 +528,18 @@ fn render() -> Result<(), Error> {
     }
     let now = store::now()?;
     for (index, target) in pending {
-        let pixels = match with(|state| state.cached(&target, side, now))? {
-            Some(pixels) => pixels,
-            None => {
-                // Outside the borrow: the shell pumps messages while it loads.
-                let pixels = icons::fetch(&wic, &target, side)?;
-                let fetched = Cached {
-                    target,
-                    fetched: now,
-                    pixels: pixels.clone(),
-                };
-                with(|state| state.fetched.push(fetched))?;
-                pixels
-            }
+        let pixels = if let Some(pixels) = with(|state| state.cached(&target, side, now))? {
+            pixels
+        } else {
+            // Outside the borrow: the shell pumps messages while it loads.
+            let pixels = icons::fetch(&wic, &target, side)?;
+            let fetched = Cached {
+                target,
+                fetched: now,
+                pixels: pixels.clone(),
+            };
+            with(|state| state.fetched.push(fetched))?;
+            pixels
         };
         with(|state| {
             state
@@ -957,7 +565,7 @@ impl State {
     }
 
     /// The icon for `target` the shell gave this run, else the one `icons.bin` holds while it is fresh.
-    fn cached(&self, target: &str, side: u32, now: u64) -> Option<Pixels> {
+    fn cached(&self, target: &str, side: u32, now: UnixSeconds) -> Option<Pixels> {
         let this_run = icons::find(&self.fetched, target, side, now);
         let saved = || icons::find(self.cache.as_deref()?, target, side, now);
         this_run.or_else(saved).cloned()
@@ -966,24 +574,25 @@ impl State {
     fn unloaded(&self) -> Vec<(usize, String)> {
         self.on_page()
             .iter()
-            .filter_map(|&index| match self.icons.get(index) {
-                Some(Some(Icon::Unloaded(target))) => Some((index, target.clone())),
-                _ => None,
-            })
+            .filter_map(
+                |&index| match self.items.get(index).map(|item| &item.icon) {
+                    Some(Some(Icon::Unloaded(target))) => Some((index, target.clone())),
+                    _ => None,
+                },
+            )
             .collect()
     }
 
-    fn show(&mut self, rows: Rows, switch: String) {
-        self.shown = menu::filter(&rows.candidates, &self.line.text());
-        self.items = rows.candidates;
-        self.icons = rows.icons;
+    fn show(&mut self, items: Vec<Listed>, switch: String) {
+        self.shown = menu::filter(candidates(&items), &self.line.text());
+        self.items = items;
         self.cursor = 0;
         self.switch = Some(switch);
     }
 
     fn set_icon(&mut self, index: usize, bitmap: ID2D1Bitmap) {
-        if let Some(slot) = self.icons.get_mut(index) {
-            *slot = Some(Icon::Loaded(bitmap));
+        if let Some(item) = self.items.get_mut(index) {
+            item.icon = Some(Icon::Loaded(bitmap));
         }
     }
 
@@ -991,10 +600,10 @@ impl State {
         let canvas = &self.canvas;
         let (layout, config) = (&canvas.layout, &canvas.config);
         let target: &ID2D1RenderTarget = &canvas.target;
-        unsafe {
-            target.BeginDraw();
-            target.Clear(Some(&D2D1_COLOR_F::default()));
-        }
+        // SAFETY: `target` is bound to the canvas DC, on the thread that made it.
+        unsafe { target.BeginDraw() };
+        // SAFETY: inside the BeginDraw above, with a color that outlives the call.
+        unsafe { target.Clear(Some(&D2D1_COLOR_F::default())) };
         let border = layout.border;
         let outside = Rect {
             left: 0.0,
@@ -1006,16 +615,23 @@ impl State {
         let radius = canvas.px(config.window.radius);
         canvas.fill(frame, radius - border, config.window.background);
         if let Some(image) = &canvas.image {
+            // SAFETY: `image` is a brush made by this `target`, and the rectangle a local.
             unsafe { target.FillRoundedRectangle(&rounded(frame, radius - border), image) };
         }
         // The list's background takes the frame's rounded bottom corners and a square top edge.
+        // SAFETY: inside the draw, and popped right after the fill below.
         unsafe { target.PushAxisAlignedClip(&d2d_rect(layout.list), D2D1_ANTIALIAS_MODE_ALIASED) };
         canvas.fill(frame, radius - border, config.list.background);
+        // SAFETY: pops the clip pushed above, inside the same draw.
+        unsafe { target.PopAxisAlignedClip() };
+        // SAFETY: the brush is live and the color a local that outlives the call.
         unsafe {
-            target.PopAxisAlignedClip();
             canvas
                 .brush
-                .SetColor(&d2d_color(config.window.border_color));
+                .SetColor(&d2d_color(config.window.border_color))
+        };
+        // SAFETY: inside the draw, with a brush made by this `target`.
+        unsafe {
             target.DrawRoundedRectangle(
                 &rounded(outside.inset(border / 2.0), radius - border / 2.0),
                 &canvas.brush,
@@ -1063,9 +679,13 @@ impl State {
             if first + slot == self.cursor {
                 canvas.fill(cell.area, canvas.px(element.radius), element.selected);
             }
-            let label = match self.icons.get(index) {
-                Some(Some(Icon::Loaded(bitmap))) => {
+            let Some(item) = self.items.get(index) else {
+                continue;
+            };
+            let label = match &item.icon {
+                Some(Icon::Loaded(bitmap)) => {
                     // Whole pixels at the bitmap's own size, so it is copied rather than resampled.
+                    // SAFETY: `bitmap` is a live bitmap made by this `target`.
                     let size = unsafe { bitmap.GetSize() };
                     let (left, top) = (cell.icon.left.round(), cell.icon.top.round());
                     let icon = Rect {
@@ -1074,6 +694,7 @@ impl State {
                         right: left + size.width,
                         bottom: top + size.height,
                     };
+                    // SAFETY: inside the draw, with a bitmap made by this `target`.
                     unsafe {
                         target.DrawBitmap(
                             bitmap,
@@ -1081,11 +702,11 @@ impl State {
                             1.0,
                             D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
                             None,
-                        )
+                        );
                     };
                     cell.label
                 }
-                Some(Some(Icon::Glyph(glyph))) => {
+                Some(Icon::Glyph(glyph)) => {
                     let glyph = glyph.to_string();
                     canvas.text(&glyph, &canvas.glyph, cell.icon, element.color);
                     cell.label
@@ -1095,227 +716,11 @@ impl State {
                     ..cell.label
                 },
             };
-            let text = self.items.get(index).map_or("", |item| item.label.as_str());
+            let text = &item.candidate.label;
             canvas.label(text, &menu::matched(text, &typed), label)?;
         }
+        // SAFETY: ends the draw begun above, and the tag outputs are optional.
         unsafe { target.EndDraw(None, None) }.map_err(win32("ID2D1RenderTarget::EndDraw"))?;
         canvas.show()
-    }
-}
-
-impl Canvas {
-    fn px(&self, length: Length) -> f32 {
-        length.px(self.em, self.scale)
-    }
-
-    fn icon_size(&self) -> u32 {
-        self.px(self.config.element.icon).round() as u32
-    }
-
-    fn fill(&self, rect: Rect, radius: f32, color: Color) {
-        unsafe {
-            self.brush.SetColor(&d2d_color(color));
-            self.target
-                .FillRoundedRectangle(&rounded(rect, radius), &self.brush);
-        }
-    }
-
-    fn text(&self, text: &str, format: &IDWriteTextFormat, rect: Rect, color: Color) {
-        let units: Vec<u16> = text.encode_utf16().collect();
-        unsafe {
-            self.brush.SetColor(&d2d_color(color));
-            self.target.DrawText(
-                &units,
-                format,
-                &d2d_rect(rect),
-                &self.brush,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                DWRITE_MEASURING_MODE_NATURAL,
-            );
-        }
-    }
-
-    /// Draws a match's label in `element.color`, with the chars at `matched` in `element.highlight`.
-    fn label(&self, text: &str, matched: &[usize], rect: Rect) -> Result<(), Error> {
-        let units: Vec<u16> = text.encode_utf16().collect();
-        let layout = unsafe {
-            self.dwrite.CreateTextLayout(
-                &units,
-                &self.text,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
-            )
-        }
-        .map_err(win32("CreateTextLayout"))?;
-        let mut start: u32 = 0;
-        for (at, letter) in text.chars().enumerate() {
-            let length = letter.len_utf16() as u32;
-            if matched.binary_search(&at).is_ok() {
-                let range = DWRITE_TEXT_RANGE {
-                    startPosition: start,
-                    length,
-                };
-                unsafe { layout.SetDrawingEffect(&self.highlight, range) }
-                    .map_err(win32("IDWriteTextLayout::SetDrawingEffect"))?;
-            }
-            start += length;
-        }
-        unsafe {
-            self.brush.SetColor(&d2d_color(self.config.element.color));
-            self.target.DrawTextLayout(
-                windows_numerics::Vector2 {
-                    X: rect.left,
-                    Y: rect.top,
-                },
-                &layout,
-                &self.brush,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP,
-            );
-        }
-        Ok(())
-    }
-
-    /// Draws the typed text, scrolled left far enough to keep the caret in view, and returns the caret's offset from
-    /// the entry's left edge.
-    fn entry(&self, typed: &str, caret: usize) -> Result<f32, Error> {
-        let entry = self.layout.entry;
-        let text = text_layout(&self.dwrite, &self.text, typed, entry.bottom - entry.top)?;
-        let (mut x, mut y, mut hit) = (0.0, 0.0, DWRITE_HIT_TEST_METRICS::default());
-        unsafe { text.HitTestTextPosition(caret as u32, false, &mut x, &mut y, &mut hit) }
-            .map_err(win32("IDWriteTextLayout::HitTestTextPosition"))?;
-        let scroll = (x - (entry.right - entry.left)).max(0.0);
-        unsafe {
-            self.brush.SetColor(&d2d_color(self.config.input.color));
-            self.target
-                .PushAxisAlignedClip(&d2d_rect(entry), D2D1_ANTIALIAS_MODE_ALIASED);
-            self.target.DrawTextLayout(
-                windows_numerics::Vector2 {
-                    X: entry.left - scroll,
-                    Y: entry.top,
-                },
-                &text,
-                &self.brush,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP,
-            );
-            self.target.PopAxisAlignedClip();
-        }
-        Ok(x - scroll)
-    }
-
-    /// `pixels` as a bitmap for this canvas, a pixel per DIP like the render target.
-    fn bitmap(&self, pixels: &Pixels) -> Result<ID2D1Bitmap, Error> {
-        let size = D2D_SIZE_U {
-            width: pixels.side,
-            height: pixels.side,
-        };
-        let properties = D2D1_BITMAP_PROPERTIES {
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-        };
-        let data = pixels.bgra.as_ptr().cast();
-        unsafe {
-            self.target
-                .CreateBitmap(size, Some(data), pixels.side * 4, &properties)
-        }
-        .map_err(win32("ID2D1RenderTarget::CreateBitmap"))
-    }
-
-    /// Puts the drawn frame on screen.
-    fn show(&self) -> Result<(), Error> {
-        let size = SIZE {
-            cx: self.layout.width as i32,
-            cy: self.layout.height as i32,
-        };
-        let blend = BLENDFUNCTION {
-            BlendOp: AC_SRC_OVER as u8,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: AC_SRC_ALPHA as u8,
-        };
-        unsafe {
-            UpdateLayeredWindow(
-                self.window,
-                None,
-                Some(&self.origin),
-                Some(&size),
-                Some(self.dc.0),
-                Some(&POINT::default()),
-                Default::default(),
-                Some(&blend),
-                ULW_ALPHA,
-            )
-        }
-        .map_err(win32("UpdateLayeredWindow"))
-    }
-}
-
-/// `rect` with corners of `radius`, kept small enough to fit.
-fn rounded(rect: Rect, radius: f32) -> D2D1_ROUNDED_RECT {
-    let radius = radius
-        .min((rect.right - rect.left) / 2.0)
-        .min((rect.bottom - rect.top) / 2.0)
-        .max(0.0);
-    D2D1_ROUNDED_RECT {
-        rect: d2d_rect(rect),
-        radiusX: radius,
-        radiusY: radius,
-    }
-}
-
-fn d2d_rect(rect: Rect) -> D2D_RECT_F {
-    D2D_RECT_F {
-        left: rect.left,
-        top: rect.top,
-        right: rect.right,
-        bottom: rect.bottom,
-    }
-}
-
-fn d2d_color(color: Color) -> D2D1_COLOR_F {
-    D2D1_COLOR_F {
-        r: color.red,
-        g: color.green,
-        b: color.blue,
-        a: color.alpha,
-    }
-}
-
-fn held(key: VIRTUAL_KEY) -> bool {
-    let state = unsafe { GetKeyState(i32::from(key.0)) };
-    state < 0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use windows::Win32::Foundation::GlobalFree;
-    use windows::Win32::System::Memory::{GHND, GlobalAlloc};
-
-    /// `locked_text` of a block holding `units`, zero-filled past them as `GlobalAlloc` leaves it.
-    fn text_of(units: &[u16]) -> Result<String, Box<dyn std::error::Error>> {
-        let global = unsafe { GlobalAlloc(GHND, size_of_val(units)) }?;
-        let data = unsafe { GlobalLock(global) }.cast::<u16>();
-        if data.is_null() {
-            return Err("GlobalLock failed".into());
-        }
-        unsafe { std::ptr::copy_nonoverlapping(units.as_ptr(), data, units.len()) };
-        // SAFETY: `data` came from GlobalLock on `global`, which stays locked until GlobalUnlock below.
-        let text = unsafe { locked_text(global, data) };
-        _ = unsafe { GlobalUnlock(global) };
-        // GlobalFree returns NULL on success, which windows-rs reports as an error, so its result says nothing.
-        _ = unsafe { GlobalFree(Some(global)) };
-        Ok(text?)
-    }
-
-    #[test]
-    fn pasted_text_ends_at_its_nul_or_its_block() -> Result<(), Box<dyn std::error::Error>> {
-        let units = |text: &str| -> Vec<u16> { text.encode_utf16().collect() };
-        assert_eq!(text_of(&units("ab\0cd"))?, "ab");
-        assert_eq!(text_of(&units("abc"))?, "abc");
-        Ok(())
     }
 }

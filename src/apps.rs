@@ -6,9 +6,7 @@ use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{ERROR_CANCELLED, ERROR_NOT_FOUND, SIZE};
 use windows::Win32::Graphics::Gdi::{BITMAP, DeleteObject, GetObjectW, HBITMAP};
 use windows::Win32::Storage::EnhancedStorage::PKEY_Link_TargetParsingPath;
-use windows::Win32::System::Com::{
-    COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, IBindCtx,
-};
+use windows::Win32::System::Com::{CoTaskMemFree, IBindCtx};
 use windows::Win32::UI::Shell::{
     BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, IShellItem2,
     IShellItemImageFactory, KF_FLAG_DEFAULT, SEE_MASK_FLAG_NO_UI, SHCreateItemFromParsingName,
@@ -20,13 +18,14 @@ use windows::core::{HSTRING, Interface, PCWSTR, PWSTR, w};
 
 use crate::error::{Error, win32};
 use crate::picker::{Picture, Row};
+use crate::platform::com;
 use crate::store;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct App {
     pub name: String,
-    /// The AppsFolder parsing name: an AUMID for packaged apps, a known-folder path for the rest.
+    /// The `AppsFolder` parsing name: an AUMID for packaged apps, a known-folder path for the rest.
     pub id: String,
     /// The file name, without `.exe`, of the program its shortcut starts. Packaged apps have none.
     pub exe: Option<String>,
@@ -59,15 +58,18 @@ impl Row for App {
 /// Every app in the Start menu's All apps list, packaged ones included, sorted by name.
 pub fn list() -> Result<Vec<App>, Error> {
     com()?;
+    // SAFETY: COM is initialized on this thread by `com` and the folder id is a static GUID.
     let folder: IShellItem =
         unsafe { SHGetKnownFolderItem(&FOLDERID_AppsFolder, KF_FLAG_DEFAULT, None) }
             .map_err(win32("SHGetKnownFolderItem"))?;
+    // SAFETY: `folder` is a live shell item and no bind context is needed.
     let items: IEnumShellItems =
         unsafe { folder.BindToHandler(None::<&IBindCtx>, &BHID_EnumItems) }
             .map_err(win32("IShellItem::BindToHandler"))?;
     let mut apps = Vec::new();
     loop {
         let mut next = [None];
+        // SAFETY: `next` holds one slot, and the fetched count may be omitted when asking for one item.
         unsafe { items.Next(&mut next, None) }.map_err(win32("IEnumShellItems::Next"))?;
         let [Some(item)] = next else { break };
         apps.push(App {
@@ -160,6 +162,7 @@ fn shell_execute(
         nShow: SW_SHOWNORMAL.0,
         ..Default::default()
     };
+    // SAFETY: `info` is sized, and `file`, `verb` and `directory` outlive the call as NUL-terminated or null strings.
     unsafe { ShellExecuteExW(&mut info) }
 }
 
@@ -170,8 +173,10 @@ pub fn icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
         target: target.to_owned(),
         source,
     };
+    // SAFETY: COM is initialized on this thread and the name is a temporary HSTRING that outlives the call.
     let factory: IShellItemImageFactory =
         unsafe { SHCreateItemFromParsingName(&HSTRING::from(target), None) }.map_err(icon)?;
+    // SAFETY: `factory` is a live COM object, and the caller owns the returned bitmap.
     unsafe { factory.GetImage(SIZE { cx: size, cy: size }, SIIGBF_ICONONLY) }.map_err(icon)
 }
 
@@ -185,9 +190,11 @@ pub fn display_icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
     let side = opaque_side(target, large);
     if let Ok(side) = side
         && side * 2 >= LARGEST.unsigned_abs() as usize
+    // A u32 widens on 64-bit Windows.
     {
         return Ok(large);
     }
+    // SAFETY: `large` came from `icon`, this function owns it, and it is not used after.
     let deleted = unsafe { DeleteObject(large.into()) }
         .ok()
         .map_err(win32("DeleteObject"));
@@ -200,6 +207,7 @@ pub fn display_icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
 /// `opaque_extent` of the shell's icon `bitmap` for `target`.
 fn opaque_side(target: &str, bitmap: HBITMAP) -> Result<usize, Error> {
     let mut info = BITMAP::default();
+    // SAFETY: `info` is a writable BITMAP of exactly the size passed.
     let written = unsafe {
         GetObjectW(
             bitmap.into(),
@@ -212,8 +220,11 @@ fn opaque_side(target: &str, bitmap: HBITMAP) -> Result<usize, Error> {
             target: target.to_owned(),
         });
     }
+    // u32 to usize widens on the only target, 64-bit Windows.
     let stride = info.bmWidthBytes.unsigned_abs() as usize;
     let length = stride * info.bmHeight.unsigned_abs() as usize;
+    // SAFETY: a DIB section's bits are non-null (checked above), span stride times height bytes, and live as long as
+    // `bitmap`, which the caller holds past this borrow.
     let pixels = unsafe { std::slice::from_raw_parts(info.bmBits as *const u8, length) };
     Ok(opaque_extent(pixels, stride))
 }
@@ -245,14 +256,8 @@ pub(crate) fn opaque_extent(pixels: &[u8], stride: usize) -> usize {
     })
 }
 
-/// The shell needs COM on the calling thread. A second call on the same thread is a no-op.
-pub(crate) fn com() -> Result<(), Error> {
-    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
-        .ok()
-        .map_err(win32("CoInitializeEx"))
-}
-
 fn display_name(item: &IShellItem, form: SIGDN) -> Result<String, Error> {
+    // SAFETY: `item` is a live shell item, and `taken` frees the returned string.
     let name = unsafe { item.GetDisplayName(form) }.map_err(win32("IShellItem::GetDisplayName"))?;
     taken(name)
 }
@@ -262,6 +267,7 @@ fn link_target(item: &IShellItem) -> Result<Option<String>, Error> {
     let item: IShellItem2 = item
         .cast()
         .map_err(win32("IShellItem::cast::<IShellItem2>"))?;
+    // SAFETY: `item` is a live shell item, the key is a static PROPERTYKEY, and `taken` frees the returned string.
     match unsafe { item.GetString(&PKEY_Link_TargetParsingPath) } {
         Ok(target) => taken(target).map(Some),
         Err(error) if error.code() == ERROR_NOT_FOUND.to_hresult() => Ok(None),
@@ -281,13 +287,17 @@ fn exe_name(target: &str) -> Option<String> {
 
 /// `text` as a `String`, freeing the shell's copy.
 fn taken(text: PWSTR) -> Result<String, Error> {
+    // SAFETY: the shell returned `text` NUL-terminated and it is still allocated.
     let owned = unsafe { text.to_string() };
+    // SAFETY: the shell allocated `text` with the COM allocator and nothing reads it after this.
     unsafe { CoTaskMemFree(Some(text.0 as _)) };
     Ok(owned?)
 }
 
 #[cfg(test)]
 mod tests {
+    use windows::Win32::Graphics::Gdi::CreateBitmap;
+
     use super::*;
 
     /// A `width` px wide 32-bit image with `alpha` at each `(x, y)` and 0 elsewhere.
@@ -302,20 +312,36 @@ mod tests {
     }
 
     #[test]
+    fn a_bitmap_without_32_bit_pixels_names_its_target() -> Result<(), Error> {
+        // SAFETY: a 1 px monochrome bitmap with no initial bits, deleted below.
+        let bitmap = unsafe { CreateBitmap(1, 1, 1, 1, None) };
+        let result = opaque_side("mono", bitmap);
+        // SAFETY: `bitmap` came from `CreateBitmap` and nothing else holds it.
+        unsafe { DeleteObject(bitmap.into()) }
+            .ok()
+            .map_err(win32("DeleteObject"))?;
+        assert!(
+            matches!(&result, Err(Error::IconBitmap { target }) if target == "mono"),
+            "got {result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn only_an_exe_target_names_an_exe() {
         let names = [
-            "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
-            "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
-            "C:\\Windows\\system32\\services.msc",
+            "C:\\Program Files\\Acme\\acme.exe",
+            "C:\\Program Files\\Widget Suite\\WIDGET.EXE",
+            "C:\\Windows\\system32\\gadgets.msc",
             "::{52205FD8-5DFB-447D-801A-D0B52F2E83E1}",
-            "https://nodejs.org/",
+            "https://example.com/",
         ]
         .map(exe_name);
         assert_eq!(
             names,
             [
-                Some("pwsh".to_owned()),
-                Some("WINWORD".to_owned()),
+                Some("acme".to_owned()),
+                Some("WIDGET".to_owned()),
                 None,
                 None,
                 None

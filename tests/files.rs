@@ -3,6 +3,8 @@
 mod common;
 
 use std::error::Error;
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
 
@@ -36,12 +38,13 @@ fn entries_list_shallowest_first_without_ignored_or_hidden_ones() -> Outcome {
             ".git/HEAD",
             ".gitignore",
             "target/out.bin",
-            "zet/tests/integration/main.go",
-            "zet/README.md",
+            "kit/tests/integration/main.go",
+            "kit/README.md",
             "hidden.txt",
         ],
     )?;
     std::fs::write(root.join(".gitignore"), "target/\n")?;
+    // SAFETY: the path is a temporary HSTRING that outlives the call.
     unsafe {
         SetFileAttributesW(
             &HSTRING::from(root.join("hidden.txt").as_path()),
@@ -53,11 +56,11 @@ fn entries_list_shallowest_first_without_ignored_or_hidden_ones() -> Outcome {
     assert_eq!(
         labels,
         [
-            "zet",
-            "zet\\README.md",
-            "zet\\tests",
-            "zet\\tests\\integration",
-            "zet\\tests\\integration\\main.go",
+            "kit",
+            "kit\\README.md",
+            "kit\\tests",
+            "kit\\tests\\integration",
+            "kit\\tests\\integration\\main.go",
         ]
     );
     assert!(
@@ -69,8 +72,23 @@ fn entries_list_shallowest_first_without_ignored_or_hidden_ones() -> Outcome {
 }
 
 #[test]
+fn a_name_that_is_not_unicode_names_its_path() -> Outcome {
+    let root = fixture("files-not-unicode", &[])?;
+    // A lone high surrogate: NTFS takes it, UTF-8 cannot hold it.
+    let path = root.join(OsString::from_wide(&[0xd800, u16::from(b'a')]));
+    std::fs::create_dir_all(&root)?;
+    std::fs::write(&path, "")?;
+    let result = files::list(std::slice::from_ref(&root));
+    assert!(
+        matches!(&result, Err(CarronadeError::FileName { path: failed }) if *failed == path),
+        "got {result:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_saved_list_loads_back_unchanged() -> Outcome {
-    let root = fixture("files-cache", &["zet/tests/main.go"])?;
+    let root = fixture("files-cache", &["kit/tests/main.go"])?;
     let entries = files::list(std::slice::from_ref(&root))?;
     let path = root.join("files.toml");
     files::save(&path, &entries)?;
@@ -92,11 +110,11 @@ fn a_missing_root_is_named_in_the_error() -> Outcome {
 
 #[test]
 fn the_folder_of_a_file_is_the_one_holding_it() -> Outcome {
-    let root = fixture("files-folder", &["zet/README.md"])?;
-    let zet = root.join("zet");
-    assert_eq!(files::folder(&zet.join("README.md"))?, zet);
-    assert_eq!(files::folder(&zet)?, zet);
-    let missing = zet.join("missing.md");
+    let root = fixture("files-folder", &["kit/README.md"])?;
+    let kit = root.join("kit");
+    assert_eq!(files::folder(&kit.join("README.md"))?, kit);
+    assert_eq!(files::folder(&kit)?, kit);
+    let missing = kit.join("missing.md");
     let result = files::folder(&missing);
     assert!(
         matches!(&result, Err(CarronadeError::Attributes { path, .. }) if *path == missing),
@@ -140,7 +158,7 @@ fn tab_in_apps_searches_the_files_for_the_query_typed() -> Outcome {
 /// Opens `mode` over a folder holding a deep `run.exe`, with no caches, and picks it with `keys`.
 fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome) -> Outcome {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
-    let root = fixture(name, &["zet/tests/integration/run.exe", "zet/run.txt"])?;
+    let root = fixture(name, &["kit/tests/integration/run.exe", "kit/run.txt"])?;
     let config = root.with_extension("toml");
     // A checkout with core.autocrlf, as on the CI runner, has CRLF line ends.
     let shipped = std::fs::read_to_string(CONFIG)?.replace("\r\n", "\n");
@@ -165,7 +183,7 @@ fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome
     let exit = picker.exit()?;
     // An empty exe fails to start with no window, whatever the machine's file associations, so the error names the
     // pick. Anything that opens a window takes the foreground from the next test's picker.
-    let picked = root.join("zet\\tests\\integration\\run.exe");
+    let picked = root.join("kit\\tests\\integration\\run.exe");
     let picked = picked.to_str().ok_or("path is not Unicode")?;
     assert_eq!(
         (exit.code, exit.stdout.as_str()),

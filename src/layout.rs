@@ -101,6 +101,7 @@ pub fn measure(
         ..text
     };
 
+    // Counts of cells, far below where f32 stops being exact.
     let (columns, lines) = (list.columns.get(), list.lines.get());
     let (padding, spacing) = (px(list.padding), px(list.spacing));
     let (inner, icon) = (px(element.padding), px(element.icon));
@@ -202,7 +203,7 @@ mod tests {
         [files]
         roots = []
         cache = false
-        terminal = "pwsh"
+        terminal = "term"
     "##;
 
     fn layout(scale: f32) -> Result<Layout, toml::de::Error> {

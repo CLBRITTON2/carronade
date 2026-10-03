@@ -1,6 +1,6 @@
 //! Embeds `carronade.manifest`: a console exe, so a shell waits for it and closes its piped stdin, that gets no console
 //! window of its own when a hotkey starts it (Windows 11 24H2 and later,
-//! https://learn.microsoft.com/en-us/windows/console/console-allocation-policy). Also embeds a version resource with
+//! <https://learn.microsoft.com/en-us/windows/console/console-allocation-policy>). Also embeds a version resource with
 //! the product name and version from `Cargo.toml`, which code signing requires.
 
 fn main() -> std::io::Result<()> {

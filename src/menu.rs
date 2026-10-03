@@ -26,10 +26,13 @@ const ALIAS: i32 = 8;
 /// Indices of the items matching every whitespace-separated term of `query` (see `term`) in their label or alias,
 /// ignoring case, best matches first. A negated term must miss both. Each item's boost adds to its score, so with no
 /// query the boosts alone rank. Equal matches keep their input order, which callers use for depth.
-pub fn filter(items: &[Candidate], query: &str) -> Vec<usize> {
+pub(crate) fn filter<'a>(
+    items: impl IntoIterator<Item = &'a Candidate>,
+    query: &str,
+) -> Vec<usize> {
     let terms = terms(query);
     let mut ranked: Vec<(Reverse<i32>, usize)> = items
-        .iter()
+        .into_iter()
         .enumerate()
         .filter_map(|(index, item)| score(item, &terms).map(|score| (Reverse(score), index)))
         .collect();
@@ -57,7 +60,7 @@ fn score(item: &Candidate, terms: &[Term]) -> Option<i32> {
 }
 
 /// The char positions in `item` of the letters the terms of `query` matched in `filter`, ascending.
-pub fn matched(item: &str, query: &str) -> Vec<usize> {
+pub(crate) fn matched(item: &str, query: &str) -> Vec<usize> {
     let letters = letters(item);
     let mut positions: Vec<usize> = terms(query)
         .iter()
@@ -315,15 +318,17 @@ fn fuzzy(letters: &[Letter], word: &[char]) -> Option<Fit> {
 }
 
 /// The row `by` rows from `cursor`, wrapping at both ends of `len` rows.
-pub fn step(cursor: usize, len: usize, by: isize) -> usize {
-    match isize::try_from(len) {
-        Ok(len) if len > 0 => (cursor as isize + by).rem_euclid(len) as usize,
+pub(crate) fn step(cursor: usize, len: usize, by: isize) -> usize {
+    match (isize::try_from(cursor), isize::try_from(len)) {
+        (Ok(cursor), Ok(len)) if len > 0 => {
+            cursor.saturating_add(by).rem_euclid(len).unsigned_abs()
+        }
         _ => 0,
     }
 }
 
 /// The row `by` rows from `cursor`, stopping at both ends of `len` rows.
-pub fn clamped(cursor: usize, len: usize, by: isize) -> usize {
+pub(crate) fn clamped(cursor: usize, len: usize, by: isize) -> usize {
     cursor.saturating_add_signed(by).min(len.saturating_sub(1))
 }
 
@@ -332,7 +337,7 @@ const NOTCH: i32 = 120;
 
 /// What a wheel turn does to the selection.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Scroll {
+pub(crate) struct Scroll {
     /// Positive moves down the list.
     pub rows: isize,
     /// The part of a notch left over, added to the next turn: touchpads send fractions of a notch.
@@ -340,31 +345,33 @@ pub struct Scroll {
 }
 
 /// A wheel turn of `delta`, positive away from the person, on top of the `pending` part of a notch.
-pub fn scroll(pending: i32, delta: i32) -> Scroll {
+pub(crate) fn scroll(pending: i32, delta: i32) -> Scroll {
     let total = pending.saturating_add(delta);
     Scroll {
+        // Widening: isize is 64 bits on the only target.
         rows: -(total / NOTCH) as isize,
         pending: total % NOTCH,
     }
 }
 
 /// The row beside `cursor` in the previous column of a grid filled down columns of `lines`, else `cursor`.
-pub fn column_left(cursor: usize, lines: NonZeroUsize) -> usize {
+pub(crate) fn column_left(cursor: usize, lines: NonZeroUsize) -> usize {
     cursor.checked_sub(lines.get()).unwrap_or(cursor)
 }
 
 /// The row beside `cursor` in the next column of `len` rows filled down columns of `lines`, or that column's last row
 /// when it is shorter, else `cursor`.
-pub fn column_right(cursor: usize, len: usize, lines: NonZeroUsize) -> usize {
+pub(crate) fn column_right(cursor: usize, len: usize, lines: NonZeroUsize) -> usize {
     let last = len.saturating_sub(1);
-    match cursor / lines < last / lines {
-        true => (cursor + lines.get()).min(last),
-        false => cursor,
+    if cursor / lines < last / lines {
+        (cursor + lines.get()).min(last)
+    } else {
+        cursor
     }
 }
 
 /// What Enter picks: the item under the cursor, else the typed query.
-pub fn accept(shown: &[usize], cursor: usize, query: &str) -> Choice<usize> {
+pub(crate) fn accept(shown: &[usize], cursor: usize, query: &str) -> Choice<usize> {
     match shown.get(cursor) {
         Some(&index) => Choice::Item(index),
         None => typed(query),
@@ -372,7 +379,7 @@ pub fn accept(shown: &[usize], cursor: usize, query: &str) -> Choice<usize> {
 }
 
 /// What Shift+Enter picks: the typed query, or nothing when it is empty.
-pub fn typed(query: &str) -> Choice<usize> {
+pub(crate) fn typed(query: &str) -> Choice<usize> {
     match query {
         "" => Choice::Cancel,
         _ => Choice::Text(query.to_owned()),
@@ -380,13 +387,13 @@ pub fn typed(query: &str) -> Choice<usize> {
 }
 
 /// The first match on the page that holds `cursor`, for a grid of `page` cells.
-pub fn first(cursor: usize, page: NonZeroUsize) -> usize {
+pub(crate) fn first(cursor: usize, page: NonZeroUsize) -> usize {
     cursor / page * page.get()
 }
 
 /// The query line, split at the caret.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Line {
+pub(crate) struct Line {
     pub before: String,
     pub after: String,
 }
@@ -501,7 +508,7 @@ mod tests {
     #[test]
     fn a_boost_ranks_the_empty_query_and_lifts_a_slightly_worse_match() {
         let boosted = |boosts: [i32; 3]| {
-            let labels = ["Notepad", "Paint", "Snipping Tool"];
+            let labels = ["Jotpad", "Palette", "Clip Tool"];
             let pairs = labels.into_iter().zip(boosts);
             pairs
                 .map(|(label, boost)| candidate(label, None, boost))
@@ -515,27 +522,24 @@ mod tests {
     #[test]
     fn an_alias_matches_below_the_same_match_in_a_label() {
         let apps = [
-            candidate("PowerShell 7 (x64)", Some("pwsh"), 0),
-            candidate("Windows PowerShell", Some("powershell"), 0),
-            candidate("pwsh notes", None, 0),
+            candidate("TowerShell 7 (x64)", Some("twsh"), 0),
+            candidate("Classic TowerShell", Some("towershell"), 0),
+            candidate("twsh notes", None, 0),
         ];
-        assert_eq!(filter(&apps, "pwsh"), [2, 0, 1]);
-        assert_eq!(filter(&apps, "pwsh 7"), [0]);
-        assert_eq!(filter(&apps, "shell !pwsh"), [1]);
+        assert_eq!(filter(&apps, "twsh"), [2, 0, 1]);
+        assert_eq!(filter(&apps, "twsh 7"), [0]);
+        assert_eq!(filter(&apps, "shell !twsh"), [1]);
     }
 
     #[test]
     fn filter_ignores_case() {
-        assert_eq!(
-            filter(&items(&["Visual Studio Code", "Notepad"]), "code"),
-            [0]
-        );
+        assert_eq!(filter(&items(&["Coder Studio", "Jotpad"]), "code"), [0]);
     }
 
     #[test]
     fn filter_needs_every_word_in_any_order() {
-        let apps = items(&["Windows Terminal", "Terminal Preview", "Windows Security"]);
-        assert_eq!(filter(&apps, "term win"), [0]);
+        let apps = items(&["Harbor Console", "Console Preview", "Harbor Shield"]);
+        assert_eq!(filter(&apps, "cons har"), [0]);
     }
 
     #[test]
@@ -545,7 +549,7 @@ mod tests {
 
     #[test]
     fn a_word_start_beats_a_match_mid_word() {
-        let apps = items(&["Notepad", "Paint", "Snipping Tool"]);
+        let apps = items(&["Jotpad", "Palette", "Clip Tool"]);
         assert_eq!(filter(&apps, "pa"), [1, 0]);
         assert_eq!(filter(&apps, "t"), [2, 0, 1]);
     }
@@ -554,9 +558,9 @@ mod tests {
     fn a_word_start_in_the_name_beats_one_in_the_folders_and_both_beat_one_mid_word() {
         let entries = items(&[
             "run\\notes.md",
-            "zet\\tests\\integration\\main.go",
-            "zet\\tests\\integration\\run.ps1",
-            "zet\\prune.go",
+            "kit\\tests\\integration\\main.go",
+            "kit\\tests\\integration\\run.ps1",
+            "kit\\prune.go",
         ]);
         assert_eq!(filter(&entries, "run"), [2, 0, 3]);
         assert_eq!(filter(&entries, "integ run"), [2]);
@@ -571,7 +575,7 @@ mod tests {
 
     #[test]
     fn a_tight_match_beats_scattered_letters() {
-        let apps = items(&["Network Tools Extra", "Notepad"]);
+        let apps = items(&["Network Tools Extra", "Notebook"]);
         assert_eq!(filter(&apps, "note"), [1, 0]);
     }
 
