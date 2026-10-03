@@ -80,6 +80,9 @@ pub fn list() -> Result<Vec<App>, Error> {
     Ok(apps)
 }
 
+/// The format version of `apps.toml`, raised when `App` changes shape.
+const VERSION: i64 = 1;
+
 /// TOML needs a table at the top, so the apps sit in an `[[app]]` array.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,11 +102,11 @@ pub fn cache_path() -> Result<PathBuf, Error> {
 
 /// The apps `save` wrote to `path`, or `None` before the first save.
 pub fn load(path: &Path) -> Result<Option<Vec<App>>, Error> {
-    Ok(store::load::<Cache>(path)?.map(|cache| cache.app))
+    Ok(store::load::<Cache>(path, VERSION)?.map(|cache| cache.app))
 }
 
 pub fn save(path: &Path, apps: &[App]) -> Result<(), Error> {
-    store::save(path, &CacheRef { app: apps })
+    store::save(path, VERSION, &CacheRef { app: apps })
 }
 
 /// Opens `target` as the Run dialog would: an `App::target`, a program on PATH, a path or a URL.

@@ -31,6 +31,38 @@ fn a_history_of_0_3_0_loads_one_use_each_a_second_apart() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn a_saved_history_starts_with_its_version() -> Result<(), Box<dyn Error>> {
+    let path = history("history-versioned");
+    history::save(&path, history::used(&[], "a", 100))?;
+    assert!(std::fs::read_to_string(&path)?.starts_with("version = 1\n"));
+    Ok(())
+}
+
+#[test]
+fn a_history_without_a_version_loads_as_the_current_one() -> Result<(), Box<dyn Error>> {
+    let path = history("history-unversioned");
+    std::fs::create_dir_all(path.parent().ok_or("no parent")?)?;
+    std::fs::write(&path, "[[used]]\nkey = \"a\"\ncount = 2\nlast = 50\n")?;
+    let expected = history::used(&history::used(&[], "a", 40), "a", 50);
+    assert_eq!(history::load(&path, 100)?, expected);
+    Ok(())
+}
+
+#[test]
+fn a_history_of_another_version_names_both() -> Result<(), Box<dyn Error>> {
+    let path = history("history-other-version");
+    std::fs::create_dir_all(path.parent().ok_or("no parent")?)?;
+    std::fs::write(&path, "version = 2\nused = []\n")?;
+    let result = history::load(&path, 0);
+    assert!(
+        matches!(&result, Err(CarronadeError::StoreVersion { path: failed, found, expected: 1 })
+            if *failed == path && found == "2"),
+        "got {result:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_missing_history_loads_empty() -> Result<(), Box<dyn Error>> {
     assert_eq!(history::load(&history("history-missing"), 0)?, []);
     Ok(())

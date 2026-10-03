@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use toml::{Table, Value};
 use windows::Win32::UI::Shell::FOLDERID_LocalAppData;
 
 use crate::config::known_folder;
@@ -24,8 +25,12 @@ pub fn now() -> Result<u64, Error> {
     Ok(since.map_err(Error::Clock)?.as_secs())
 }
 
-/// What `save` wrote to `path`, or `None` before the first save.
-pub fn load<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, Error> {
+/// The top-level key holding a file's format version, which `T` in `load` and `save` never sees.
+const VERSION: &str = "version";
+
+/// What `save` wrote to `path` at `version`, or `None` before the first save. A file without a version, as 0.3.0 and
+/// earlier wrote, loads as `version`.
+pub fn load<T: DeserializeOwned>(path: &Path, version: i64) -> Result<Option<T>, Error> {
     let Some(bytes) = read(path)? else {
         return Ok(None);
     };
@@ -33,20 +38,34 @@ pub fn load<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, Error> {
         path: path.to_owned(),
         source: std::io::Error::new(ErrorKind::InvalidData, source),
     })?;
-    toml::from_str(&text)
-        .map(Some)
-        .map_err(|source| Error::StoreParse {
-            path: path.to_owned(),
-            source: Box::new(source),
-        })
+    let parse = |source| Error::StoreParse {
+        path: path.to_owned(),
+        source: Box::new(source),
+    };
+    let mut table: Table = toml::from_str(&text).map_err(parse)?;
+    match table.remove(VERSION) {
+        None => {}
+        Some(Value::Integer(found)) if found == version => {}
+        Some(found) => {
+            return Err(Error::StoreVersion {
+                path: path.to_owned(),
+                found: found.to_string(),
+                expected: version,
+            });
+        }
+    }
+    table.try_into().map(Some).map_err(parse)
 }
 
-/// Writes `value` for `load`, through a temporary file so a reader never sees half of it.
-pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
-    let text = toml::to_string(value).map_err(|source| Error::StoreSerialize {
+/// Writes `value` at `version` for `load`, through a temporary file so a reader never sees half of it.
+pub fn save<T: Serialize>(path: &Path, version: i64, value: &T) -> Result<(), Error> {
+    let serialize = |source| Error::StoreSerialize {
         path: path.to_owned(),
         source,
-    })?;
+    };
+    let mut table = Table::try_from(value).map_err(serialize)?;
+    table.insert(VERSION.to_owned(), Value::Integer(version));
+    let text = toml::to_string(&table).map_err(serialize)?;
     write(path, text.as_bytes())
 }
 

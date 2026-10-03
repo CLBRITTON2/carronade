@@ -75,6 +75,14 @@ pub enum Error {
         #[source]
         source: Box<toml::de::Error>,
     },
+    #[error(
+        "{path:?} has version {found}, this carronade reads version {expected}, delete it to start it over"
+    )]
+    StoreVersion {
+        path: PathBuf,
+        found: String,
+        expected: i64,
+    },
     #[error("the system clock is before 1970")]
     Clock(#[source] std::time::SystemTimeError),
     #[error("{path:?} is not an icon cache carronade wrote, delete it to start it over")]

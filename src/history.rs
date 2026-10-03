@@ -42,12 +42,16 @@ pub fn files_path() -> Result<PathBuf, Error> {
     store::path("files-history.toml")
 }
 
+/// The format version of the history files, raised when `Use` changes shape.
+const VERSION: i64 = 1;
+
 /// The uses `save` wrote to `path`, empty before the first. A history of 0.3.0 or earlier loads as one use per key, a
 /// second apart before `now` in its order.
 pub fn load(path: &Path, now: u64) -> Result<Vec<Use>, Error> {
-    match store::load::<History>(path) {
+    // 0.3.0's history and this format's first saves carry no version, so only the shape tells them apart.
+    match store::load::<History>(path, VERSION) {
         Ok(history) => Ok(history.map_or_else(Vec::new, |history| history.used)),
-        Err(error @ Error::StoreParse { .. }) => match store::load::<Order>(path) {
+        Err(error @ Error::StoreParse { .. }) => match store::load::<Order>(path, VERSION) {
             Ok(Some(order)) => Ok(counted(order, now)),
             Ok(None) | Err(_) => Err(error),
         },
@@ -67,7 +71,7 @@ fn counted(order: Order, now: u64) -> Vec<Use> {
 }
 
 pub fn save(path: &Path, used: Vec<Use>) -> Result<(), Error> {
-    store::save(path, &History { used })
+    store::save(path, VERSION, &History { used })
 }
 
 /// `uses` with one more use of `key` at `now`.

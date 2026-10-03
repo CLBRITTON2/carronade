@@ -64,6 +64,9 @@ pub fn folder(path: &Path) -> Result<PathBuf, Error> {
     }
 }
 
+/// The format version of `files.toml`, raised when `Entry` changes shape.
+const VERSION: i64 = 1;
+
 /// TOML needs a table at the top, so the entries sit in an `[[entry]]` array.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,11 +86,11 @@ pub fn cache_path() -> Result<PathBuf, Error> {
 
 /// The entries `save` wrote to `path`, or `None` before the first save.
 pub fn load(path: &Path) -> Result<Option<Vec<Entry>>, Error> {
-    Ok(store::load::<Cache>(path)?.map(|cache| cache.entry))
+    Ok(store::load::<Cache>(path, VERSION)?.map(|cache| cache.entry))
 }
 
 pub fn save(path: &Path, entries: &[Entry]) -> Result<(), Error> {
-    store::save(path, &CacheRef { entry: entries })
+    store::save(path, VERSION, &CacheRef { entry: entries })
 }
 
 fn below(root: &Path) -> Result<Vec<Entry>, Error> {
