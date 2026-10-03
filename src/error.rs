@@ -4,13 +4,13 @@ use std::path::PathBuf;
 pub enum Error {
     #[error("usage: carronade [--config <path>] <dmenu|apps|files>, got {0:?}")]
     Usage(Vec<String>),
-    #[error("reading the config {path:?} failed: {source}")]
+    #[error("reading the config {path:?} failed")]
     ConfigRead {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("the config {path:?} is invalid: {source}")]
+    #[error("the config {path:?} is invalid")]
     ConfigParse {
         path: PathBuf,
         #[source]
@@ -18,38 +18,38 @@ pub enum Error {
     },
     #[error("the font family {0:?} is not installed")]
     Font(String),
-    #[error("loading the image {path:?} failed: {source}")]
+    #[error("loading the image {path:?} failed")]
     Image {
         path: PathBuf,
         #[source]
         source: windows::core::Error,
     },
-    #[error("reading items from stdin failed: {0}")]
+    #[error("reading items from stdin failed")]
     Stdin(#[source] std::io::Error),
-    #[error("writing the selection to stdout failed: {0}")]
+    #[error("writing the selection to stdout failed")]
     Stdout(#[source] std::io::Error),
-    #[error("{call} failed: {source}")]
+    #[error("{call} failed")]
     Win32 {
         call: &'static str,
         #[source]
         source: windows::core::Error,
     },
-    #[error("text is not valid UTF-16: {0}")]
+    #[error("text is not valid UTF-16")]
     Utf16(#[from] std::string::FromUtf16Error),
-    #[error("launching {target:?} failed: {source}")]
+    #[error("launching {target:?} failed")]
     Launch {
         target: String,
         #[source]
         source: windows::core::Error,
     },
-    #[error("launching {program:?} in {folder:?} failed: {source}")]
+    #[error("launching {program:?} in {folder:?} failed")]
     LaunchIn {
         program: String,
         folder: PathBuf,
         #[source]
         source: windows::core::Error,
     },
-    #[error("reading the attributes of {path:?} failed: {source}")]
+    #[error("reading the attributes of {path:?} failed")]
     Attributes {
         path: PathBuf,
         #[source]
@@ -57,7 +57,7 @@ pub enum Error {
     },
     #[error("{path:?} is a file with no folder above it")]
     NoParent { path: PathBuf },
-    #[error("loading the icon of {target:?} failed: {source}")]
+    #[error("loading the icon of {target:?} failed")]
     Icon {
         target: String,
         #[source]
@@ -65,35 +65,35 @@ pub enum Error {
     },
     #[error("the shell's icon of {target:?} is not a 32-bit bitmap")]
     IconBitmap { target: String },
-    #[error("reading {path:?} failed: {source}")]
+    #[error("reading {path:?} failed")]
     StoreRead {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("{path:?} is invalid, delete it to start it over: {source}")]
+    #[error("{path:?} is invalid, delete it to start it over")]
     StoreParse {
         path: PathBuf,
         #[source]
         source: Box<toml::de::Error>,
     },
-    #[error("the system clock is before 1970: {0}")]
+    #[error("the system clock is before 1970")]
     Clock(#[source] std::time::SystemTimeError),
     #[error("{path:?} is not an icon cache carronade wrote, delete it to start it over")]
     IconCache { path: PathBuf },
-    #[error("writing {path:?} failed: {source}")]
+    #[error("writing {path:?} failed")]
     StoreWrite {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("encoding {path:?} failed: {source}")]
+    #[error("encoding {path:?} failed")]
     StoreSerialize {
         path: PathBuf,
         #[source]
         source: toml::ser::Error,
     },
-    #[error("listing the files below {root:?} failed: {source}")]
+    #[error("listing the files below {root:?} failed")]
     Walk {
         root: PathBuf,
         #[source]

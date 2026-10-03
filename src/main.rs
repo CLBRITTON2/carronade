@@ -326,17 +326,21 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
 
 /// Writes to stderr when the caller gave one, else shows a message box: started from a hotkey, nothing reads stderr.
 fn report(error: &Error) {
+    let text = chain(error);
     match unsafe { GetStdHandle(STD_ERROR_HANDLE) } {
-        Ok(handle) if !handle.is_invalid() => eprintln!("carronade: {error}"),
+        Ok(handle) if !handle.is_invalid() => eprintln!("carronade: {text}"),
         _ => {
-            unsafe {
-                MessageBoxW(
-                    None,
-                    &HSTRING::from(error.to_string()),
-                    w!("carronade"),
-                    MB_ICONERROR,
-                )
-            };
+            unsafe { MessageBoxW(None, &HSTRING::from(text), w!("carronade"), MB_ICONERROR) };
         }
     }
+}
+
+/// `error` and each cause below it, outermost first, joined by `: `.
+fn chain(error: &Error) -> String {
+    std::iter::successors(Some(error as &dyn std::error::Error), |error| {
+        error.source()
+    })
+    .map(ToString::to_string)
+    .collect::<Vec<String>>()
+    .join(": ")
 }
