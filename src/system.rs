@@ -1,6 +1,6 @@
 //! Commands that lock, end the session or power the machine down, listed after the apps.
 
-use windows::Win32::Foundation::{CloseHandle, ERROR_NOT_ALL_ASSIGNED, GetLastError, HANDLE, LUID};
+use windows::Win32::Foundation::{ERROR_NOT_ALL_ASSIGNED, GetLastError, HANDLE, LUID};
 use windows::Win32::Security::{
     AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED,
     SE_SHUTDOWN_NAME, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
@@ -11,6 +11,7 @@ use windows::Win32::System::Shutdown::{
     SHTDN_REASON_FLAG_PLANNED, SHTDN_REASON_MAJOR_OTHER,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows::core::Owned;
 
 use crate::error::{Error, last, win32};
 use crate::picker::{Picture, Row};
@@ -95,9 +96,8 @@ fn enable_shutdown() -> Result<(), Error> {
     let mut token = HANDLE::default();
     unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &mut token) }
         .map_err(win32("OpenProcessToken"))?;
-    let enabled = enable(token, SE_SHUTDOWN_NAME);
-    unsafe { CloseHandle(token) }.map_err(win32("CloseHandle"))?;
-    enabled
+    let token = unsafe { Owned::new(token) };
+    enable(*token, SE_SHUTDOWN_NAME)
 }
 
 fn enable(token: HANDLE, privilege: windows::core::PCWSTR) -> Result<(), Error> {
