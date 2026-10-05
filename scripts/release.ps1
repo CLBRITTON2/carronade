@@ -19,7 +19,7 @@ param(
 . (Join-Path $PSScriptRoot 'cargo.ps1')
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 
-$version = (cargo metadata --manifest-path $manifest --no-deps --format-version 1 | ConvertFrom-Json).packages |
+$version = (cargo metadata --manifest-path $manifest --no-deps --format-version 1 --locked | ConvertFrom-Json).packages |
     Where-Object name -EQ 'carronade' |
     Select-Object -ExpandProperty version
 if ($LASTEXITCODE -ne 0) {
@@ -30,7 +30,7 @@ if ($Tag -ne "v$version") {
 }
 $notes = & (Join-Path $PSScriptRoot 'extract-version-release-notes.ps1') -Version $version
 
-Invoke-Cargo @('build', '--manifest-path', $manifest, '--release')
+Invoke-Cargo @('build', '--manifest-path', $manifest, '--release', '--locked')
 
 $staging = Join-Path $root "target\release-package\carronade-$Tag"
 $zip = Join-Path $root "target\carronade-$Tag-x86_64-pc-windows-msvc.zip"
@@ -45,7 +45,11 @@ $notesFile = Join-Path $root "target\release-package\notes-$Tag.md"
 Set-Content -Path $notesFile -Value $notes
 
 $env:GH_TOKEN = $Token
-& gh release create $Tag $zip --repo CLBRITTON2/carronade --title $Tag --notes-file $notesFile --verify-tag
-if ($LASTEXITCODE -ne 0) {
-    throw "gh release create $Tag failed with exit code $LASTEXITCODE"
+try {
+    & gh release create $Tag $zip --repo CLBRITTON2/carronade --title $Tag --notes-file $notesFile --verify-tag
+    if ($LASTEXITCODE -ne 0) {
+        throw "gh release create $Tag failed with exit code $LASTEXITCODE"
+    }
+} finally {
+    Remove-Item Env:GH_TOKEN
 }

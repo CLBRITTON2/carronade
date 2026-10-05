@@ -8,4 +8,4 @@ since anything that takes focus cancels the open picker.
 #>
 . (Join-Path $PSScriptRoot 'cargo.ps1')
 
-Invoke-Cargo @('test', '--manifest-path', $manifest, '--test', '*')
+Invoke-Cargo @('test', '--manifest-path', $manifest, '--test', '*', '--locked')

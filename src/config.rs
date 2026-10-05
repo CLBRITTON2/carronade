@@ -365,7 +365,8 @@ mod tests {
     }
 
     #[test]
-    fn lengths_need_a_unit_and_a_positive_number() {
+    fn lengths_need_a_unit_and_a_finite_number_not_below_0() {
+        assert_eq!(length("0px"), Ok(Length::Px(0.0)));
         for text in ["3", "3pt", "-1px", "em", "NaNpx", "infem"] {
             assert!(length(text).is_err(), "{text:?} parsed");
         }
@@ -489,6 +490,11 @@ mod tests {
         let error = toml::from_str::<Config>(&text)
             .err()
             .map(|error| error.to_string());
-        assert!(error.is_some_and(|error| error.contains("cycle")));
+        assert!(
+            error
+                .as_ref()
+                .is_some_and(|error| error.contains("unknown field `cycle`")),
+            "got {error:?}"
+        );
     }
 }

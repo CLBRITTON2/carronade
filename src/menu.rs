@@ -192,14 +192,15 @@ fn run(letters: &[Letter], word: &[char], start: usize) -> Option<Fit> {
     })
 }
 
+// fzf's scores: https://github.com/junegunn/fzf/blob/master/src/algo/algo.go
 const MATCH: i32 = 16;
+const CONSECUTIVE: i32 = 4;
+const GAP_START: i32 = 3;
+const GAP_EXTENSION: i32 = 1;
 /// Per matched letter at a word start: the item's start, after a non-alphanumeric, or a capital after a lowercase.
 const BOUNDARY: i32 = 8;
 /// Per matched letter in the name, the part after the last path separator, so name matches beat folder matches.
 const NAME: i32 = 8;
-const CONSECUTIVE: i32 = 4;
-const GAP_START: i32 = 3;
-const GAP_EXTENSION: i32 = 1;
 
 /// One letter of an item, lowercase, with the bonuses a match on it earns.
 #[derive(Clone, Copy)]
@@ -390,6 +391,11 @@ pub(crate) fn typed(query: &str) -> Choice<usize> {
 /// The first match on the page that holds `cursor`, for a grid of `page` cells.
 pub(crate) fn first(cursor: usize, page: NonZeroUsize) -> usize {
     cursor / page * page.get()
+}
+
+/// The match that cell `slot` shows on the page holding `cursor`, or `None` past the last of `len` matches.
+pub(crate) fn row_at(cursor: usize, page: NonZeroUsize, slot: usize, len: usize) -> Option<usize> {
+    Some(first(cursor, page) + slot).filter(|&row| row < len)
 }
 
 /// The query line, split at the caret.
@@ -656,12 +662,12 @@ mod tests {
 
     #[test]
     fn a_wheel_moves_a_row_per_notch_and_keeps_the_rest() {
-        let turn = |rows, pending| Scroll { rows, pending };
-        assert_eq!(scroll(0, 120), turn(-1, 0));
-        assert_eq!(scroll(0, -240), turn(2, 0));
-        assert_eq!(scroll(0, 40), turn(0, 40));
-        assert_eq!(scroll(80, 40), turn(-1, 0));
-        assert_eq!(scroll(0, -130), turn(1, -10));
+        let scrolled = |rows, pending| Scroll { rows, pending };
+        assert_eq!(scroll(0, 120), scrolled(-1, 0));
+        assert_eq!(scroll(0, -240), scrolled(2, 0));
+        assert_eq!(scroll(0, 40), scrolled(0, 40));
+        assert_eq!(scroll(80, 40), scrolled(-1, 0));
+        assert_eq!(scroll(0, -130), scrolled(1, -10));
     }
 
     #[test]
@@ -715,14 +721,24 @@ mod tests {
     }
 
     #[test]
+    fn a_cell_shows_the_match_its_slot_holds_on_the_cursors_page() -> Result<(), &'static str> {
+        let page = NonZeroUsize::new(6).ok_or("zero page")?;
+        assert_eq!(row_at(8, page, 2, 10), Some(8));
+        assert_eq!(row_at(8, page, 3, 10), Some(9));
+        assert_eq!(row_at(8, page, 4, 10), None);
+        assert_eq!(row_at(0, page, 0, 0), None);
+        Ok(())
+    }
+
+    #[test]
     fn delete_word_removes_last_word_and_its_trailing_space() {
         assert_eq!(
-            line("visual studio ", "").delete_word(),
-            line("visual ", "")
+            line("harbor charts ", "").delete_word(),
+            line("harbor ", "")
         );
         assert_eq!(
-            line("visual studio", " x").delete_word(),
-            line("visual ", " x")
+            line("harbor charts", " x").delete_word(),
+            line("harbor ", " x")
         );
         assert_eq!(line("code", "").delete_word(), line("", ""));
         assert_eq!(line("", "code").delete_word(), line("", "code"));

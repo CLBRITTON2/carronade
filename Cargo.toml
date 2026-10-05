@@ -2,6 +2,8 @@
 name = "carronade"
 version = "0.3.0"
 edition = "2024"
+# Let chains and `as_chunks`.
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "A keyboard launcher for Windows: Start menu apps, files and dmenu-style picks from stdin"
 repository = "https://github.com/CLBRITTON2/carronade"

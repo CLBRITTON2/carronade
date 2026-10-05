@@ -8,7 +8,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use carronade::error::Error as CarronadeError;
-use carronade::{files, shell};
+use carronade::{files, icons, shell};
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, SetFileAttributesW};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_TAB};
 use windows::core::HSTRING;
@@ -92,7 +92,13 @@ fn a_saved_list_loads_back_unchanged() -> Outcome {
     let path = root.join("files.toml");
     files::save(&path, &entries)?;
     assert_eq!(files::load(&path)?, Some(entries));
-    assert_eq!(files::load(&root.join("missing.toml"))?, None);
+    Ok(())
+}
+
+#[test]
+fn a_missing_list_loads_as_none() -> Outcome {
+    let root = fixture("files-cache-missing", &[])?;
+    assert_eq!(files::load(&root.join("files.toml"))?, None);
     Ok(())
 }
 
@@ -113,10 +119,27 @@ fn the_folder_of_a_file_is_the_one_holding_it() -> Outcome {
     let kit = root.join("kit");
     assert_eq!(files::folder(&kit.join("README.md"))?, kit);
     assert_eq!(files::folder(&kit)?, kit);
-    let missing = kit.join("missing.md");
+    Ok(())
+}
+
+#[test]
+fn the_folder_of_a_missing_path_names_it_in_the_error() -> Outcome {
+    let missing = fixture("files-folder-missing", &[])?.join("missing.md");
     let result = files::folder(&missing);
     assert!(
         matches!(&result, Err(CarronadeError::Attributes { path, .. }) if *path == missing),
+        "got {result:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_missing_entry_is_no_item() -> Outcome {
+    let missing = fixture("files-icon-missing", &[])?.join("missing.md");
+    let target = missing.to_str().ok_or("path is not Unicode")?;
+    let result = icons::icon(target, 32);
+    assert!(
+        matches!(&result, Err(CarronadeError::NoItem { target: failed, .. }) if failed == target),
         "got {result:?}"
     );
     Ok(())

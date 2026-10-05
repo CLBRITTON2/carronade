@@ -84,7 +84,7 @@ pub fn list() -> Result<Vec<App>, Error> {
         let exe = link_target(&item, &name)?.as_deref().and_then(exe_name);
         apps.push(App { name, id, exe });
     }
-    apps.sort_by_key(|app| app.name.to_lowercase());
+    apps.sort_by_cached_key(|app| app.name.to_lowercase());
     Ok(apps)
 }
 
@@ -164,7 +164,7 @@ unsafe fn taken(text: PWSTR, what: &'static str) -> Result<String, Error> {
     // SAFETY: the caller guarantees `text` is NUL-terminated and still allocated.
     let owned = unsafe { text.to_string() };
     // SAFETY: the caller guarantees the COM allocator owns `text` and nothing reads it after this.
-    unsafe { CoTaskMemFree(Some(text.0 as _)) };
+    unsafe { CoTaskMemFree(Some(text.0.cast_const().cast())) };
     owned.map_err(utf16(what))
 }
 

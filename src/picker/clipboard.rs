@@ -80,10 +80,12 @@ fn clipboard_text() -> Result<String, Error> {
 /// `data` must be the pointer `GlobalLock` returned for `global`, and the block must stay locked for the call.
 unsafe fn locked_text(global: HGLOBAL, data: *const u16) -> Result<String, Error> {
     // SAFETY: the caller passes a live, locked global block.
-    let units = unsafe { GlobalSize(global) } / size_of::<u16>();
-    if units == 0 {
+    let bytes = unsafe { GlobalSize(global) };
+    if bytes == 0 {
         return Err(last("GlobalSize"));
     }
+    // A 1-byte block holds no whole unit, so it reads as no text.
+    let units = bytes / size_of::<u16>();
     // SAFETY: `data` points at the locked block, which holds at least `units` u16s and stays locked for the call.
     let block = unsafe { std::slice::from_raw_parts(data, units) };
     let text = match block.iter().position(|&unit| unit == 0) {
@@ -106,6 +108,8 @@ mod tests {
         // SAFETY: `global` is the movable block just allocated, unlocked below.
         let data = unsafe { GlobalLock(global) }.cast::<u16>();
         if data.is_null() {
+            // SAFETY: frees the block this function allocated, never locked.
+            _ = unsafe { GlobalFree(Some(global)) };
             return Err("GlobalLock failed".into());
         }
         // SAFETY: the block was sized for `units`, and a fresh allocation cannot overlap the slice.
@@ -125,6 +129,22 @@ mod tests {
         let units = |text: &str| -> Vec<u16> { text.encode_utf16().collect() };
         assert_eq!(text_of(&units("ab\0cd"))??, "ab");
         assert_eq!(text_of(&units("abc"))??, "abc");
+        Ok(())
+    }
+
+    #[test]
+    fn a_block_too_small_for_a_unit_pastes_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        // SAFETY: allocates a fresh 1-byte block, freed below.
+        let global = unsafe { GlobalAlloc(GHND, 1) }?;
+        // SAFETY: `global` is the movable block just allocated, unlocked below.
+        let data = unsafe { GlobalLock(global) }.cast::<u16>();
+        // SAFETY: `data` came from GlobalLock on `global`, which stays locked until GlobalUnlock below.
+        let text = (!data.is_null()).then(|| unsafe { locked_text(global, data) });
+        // SAFETY: releases the lock taken above, after the last read of `data`.
+        _ = unsafe { GlobalUnlock(global) };
+        // SAFETY: frees the unlocked block this function allocated, used no further.
+        _ = unsafe { GlobalFree(Some(global)) };
+        assert_eq!(text.ok_or("GlobalLock failed")??, "");
         Ok(())
     }
 

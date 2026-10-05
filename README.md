@@ -24,6 +24,8 @@ carronade files
 'one', 'two' | carronade dmenu
 # use another config
 carronade --config C:\path\to\config.toml apps
+# list the modes, options and exit codes
+carronade --help
 ```
 
 apps also lists Lock, Sign out, Hibernate, Restart and Shut down after the apps, each with a Segoe MDL2 Assets icon.

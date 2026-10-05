@@ -23,14 +23,15 @@ use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MessageBoxW};
 use windows::core::{HSTRING, w};
 
 fn main() -> ExitCode {
-    let (path, mode) = match parse(std::env::args().skip(1).collect()) {
-        Ok(parsed) => parsed,
-        Err(usage) => return fail(&usage),
-    };
-    match run(path.as_deref(), mode) {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::from(1),
-        Err(error) => fail(&error),
+    match parse(std::env::args().skip(1).collect()) {
+        Ok(Request::Help) => print("help", &help()),
+        Ok(Request::Version) => print("version", VERSION),
+        Ok(Request::Run { config, mode }) => match run(config.as_deref(), mode) {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::from(1),
+            Err(error) => fail(&error),
+        },
+        Err(usage) => fail(&usage),
     }
 }
 
@@ -39,31 +40,91 @@ fn fail(error: &dyn std::error::Error) -> ExitCode {
     ExitCode::from(2)
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Writes `text`, the `what` asked for, to stdout.
+fn print(what: &'static str, text: &str) -> ExitCode {
+    match writeln!(std::io::stdout(), "{text}") {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(source) => fail(&Error::Print { what, source }),
+    }
+}
+
+const VERSION: &str = concat!("carronade ", env!("CARGO_PKG_VERSION"));
+
+/// The help below its version and description lines, which a missing mode also prints.
+const USAGE: &str = "\
+Usage: carronade [--config <path>] <mode>
+
+Modes:
+  apps   Launch a Start menu app, or lock, sign out, hibernate, restart or shut down
+  files  Open a file or folder found below files.roots
+  dmenu  Print the line picked from the lines read on stdin
+
+Tab switches between apps and files in the same window.
+
+Options:
+  --config <path>  Read the config from <path> instead of %APPDATA%\\carronade\\config.toml
+  -h, --help       Print this help
+  -V, --version    Print the version
+
+Exits 0 when something is picked, 1 on cancel and 2 on error.";
+
+fn help() -> String {
+    format!("{VERSION}\n{}.\n\n{USAGE}", env!("CARGO_PKG_DESCRIPTION"))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Dmenu,
     Apps,
     Files,
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("usage: carronade [--config <path>] <dmenu|apps|files>, got {0:?}")]
-struct Usage(Vec<String>);
+/// What the command line asks for.
+#[derive(Debug, PartialEq, Eq)]
+enum Request {
+    Help,
+    Version,
+    Run { config: Option<PathBuf>, mode: Mode },
+}
 
-/// The config path and the mode `args` name.
-fn parse(args: Vec<String>) -> Result<(Option<PathBuf>, Mode), Usage> {
-    let (path, mode) = match args.as_slice() {
-        [mode] => (None, mode),
-        [flag, path, mode] if flag == "--config" => (Some(PathBuf::from(path)), mode),
-        _ => return Err(Usage(args)),
-    };
-    let mode = match mode.as_str() {
-        "dmenu" => Mode::Dmenu,
-        "apps" => Mode::Apps,
-        "files" => Mode::Files,
-        _ => return Err(Usage(args)),
-    };
-    Ok((path, mode))
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+enum Usage {
+    #[error("a mode is required\n\n{}", USAGE)]
+    Missing,
+    #[error("--config needs a path\n\nRun carronade --help for usage.")]
+    NoConfigPath,
+    #[error("{0:?} is not a mode, use apps, files or dmenu\n\nRun carronade --help for usage.")]
+    NotAMode(String),
+    #[error("unexpected arguments {0:?}\n\nRun carronade --help for usage.")]
+    Unexpected(Vec<String>),
+}
+
+fn parse(args: Vec<String>) -> Result<Request, Usage> {
+    match args.as_slice() {
+        [] => Err(Usage::Missing),
+        [flag] if flag == "-h" || flag == "--help" => Ok(Request::Help),
+        [flag] if flag == "-V" || flag == "--version" => Ok(Request::Version),
+        [flag] if flag == "--config" => Err(Usage::NoConfigPath),
+        [flag, _] if flag == "--config" => Err(Usage::Missing),
+        [mode] => Ok(Request::Run {
+            config: None,
+            mode: mode_named(mode)?,
+        }),
+        [flag, path, mode] if flag == "--config" => Ok(Request::Run {
+            config: Some(PathBuf::from(path)),
+            mode: mode_named(mode)?,
+        }),
+        _ => Err(Usage::Unexpected(args)),
+    }
+}
+
+fn mode_named(word: &str) -> Result<Mode, Usage> {
+    match word {
+        "apps" => Ok(Mode::Apps),
+        "files" => Ok(Mode::Files),
+        "dmenu" => Ok(Mode::Dmenu),
+        _ => Err(Usage::NotAMode(word.to_owned())),
+    }
 }
 
 /// Runs `mode` with the config at `path`, or the default one, returning whether something was picked.
@@ -105,7 +166,7 @@ impl Kind {
     }
 }
 
-/// An app or entry with the boost its history gives it.
+/// An app or entry with the boost its history gives it, or a system command, which has none.
 #[derive(Clone, Debug)]
 enum Item {
     App(App, i32),
@@ -146,7 +207,7 @@ impl Row for Item {
     }
 }
 
-/// What a search needs from the config, which the picker takes.
+/// What a search needs from the config, which the picker takes, and from the histories: their uses and boosts.
 #[derive(Debug)]
 struct Settings {
     apps_cache: bool,
@@ -337,10 +398,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         }
         Picked::Open(Choice::Item(Item::Entry(entry, _))) => {
             shell::launch(&entry.path)?;
-            history::save(
-                &files_history,
-                history::used(&settings.recent_files, &entry.path, settings.now),
-            )?;
+            record_entry(&files_history, &settings, &entry)?;
             true
         }
         Picked::Open(Choice::Text(text)) => {
@@ -350,6 +408,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         Picked::Open(Choice::Cancel) => false,
         Picked::Terminal(entry) => {
             shell::launch_in(&settings.terminal, &files::folder(Path::new(&entry.path))?)?;
+            record_entry(&files_history, &settings, &entry)?;
             true
         }
     };
@@ -373,21 +432,30 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
 fn record_app(path: &Path, settings: &Settings, app: &App) -> Result<(), Error> {
     history::save(
         path,
-        history::used(&settings.recent_apps, &app.id, settings.now),
+        &history::used(&settings.recent_apps, &app.id, settings.now),
+    )
+}
+
+/// Saves the files history at `path` with one more use of `entry`.
+fn record_entry(path: &Path, settings: &Settings, entry: &files::Entry) -> Result<(), Error> {
+    history::save(
+        path,
+        &history::used(&settings.recent_files, &entry.path, settings.now),
     )
 }
 
 /// Writes to stderr when the caller gave one, else shows a message box: started from a hotkey, nothing reads stderr.
+/// A stderr that fails the write gets the message box too.
 fn report(error: &dyn std::error::Error) {
     let text = chain(error);
     // SAFETY: reads this process's standard handle and takes no ownership of it.
-    match unsafe { GetStdHandle(STD_ERROR_HANDLE) } {
-        Ok(handle) if !handle.is_invalid() => eprintln!("carronade: {text}"),
-        _ => {
-            // SAFETY: the text is a temporary HSTRING and the caption a static wide string, both outliving the call.
-            unsafe { MessageBoxW(None, &HSTRING::from(text), w!("carronade"), MB_ICONERROR) };
-        }
+    let handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    let has_stderr = handle.is_ok_and(|handle| !handle.is_invalid());
+    if has_stderr && writeln!(std::io::stderr(), "carronade: {text}").is_ok() {
+        return;
     }
+    // SAFETY: the text is a temporary HSTRING and the caption a static wide string, both outliving the call.
+    unsafe { MessageBoxW(None, &HSTRING::from(text), w!("carronade"), MB_ICONERROR) };
 }
 
 /// `error` and each cause below it, outermost first, joined by `: `.
@@ -396,4 +464,51 @@ fn chain(error: &dyn std::error::Error) -> String {
         .map(ToString::to_string)
         .collect::<Vec<String>>()
         .join(": ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(args: &[&str]) -> Result<Request, Usage> {
+        parse(args.iter().map(|&arg| arg.to_owned()).collect())
+    }
+
+    #[test]
+    fn a_mode_runs_with_or_without_a_config() {
+        let run = |config: Option<&str>, mode| Request::Run {
+            config: config.map(PathBuf::from),
+            mode,
+        };
+        assert_eq!(parsed(&["apps"]), Ok(run(None, Mode::Apps)));
+        assert_eq!(
+            parsed(&["--config", "c.toml", "dmenu"]),
+            Ok(run(Some("c.toml"), Mode::Dmenu))
+        );
+    }
+
+    #[test]
+    fn help_and_version_take_a_short_and_a_long_flag() {
+        for flag in ["-h", "--help"] {
+            assert_eq!(parsed(&[flag]), Ok(Request::Help));
+        }
+        for flag in ["-V", "--version"] {
+            assert_eq!(parsed(&[flag]), Ok(Request::Version));
+        }
+    }
+
+    #[test]
+    fn a_bad_command_line_says_what_is_wrong() {
+        assert_eq!(parsed(&[]), Err(Usage::Missing));
+        assert_eq!(parsed(&["--config", "c.toml"]), Err(Usage::Missing));
+        assert_eq!(parsed(&["--config"]), Err(Usage::NoConfigPath));
+        assert_eq!(parsed(&["show"]), Err(Usage::NotAMode("show".to_owned())));
+        assert_eq!(
+            parsed(&["apps", "files"]),
+            Err(Usage::Unexpected(vec![
+                "apps".to_owned(),
+                "files".to_owned()
+            ]))
+        );
+    }
 }

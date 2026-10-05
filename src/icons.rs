@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::SIZE;
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, SIZE};
 use windows::Win32::Graphics::Gdi::{BITMAP, GetObjectW, HBITMAP, HPALETTE};
 use windows::Win32::Graphics::Imaging::{
     IWICImagingFactory, WICBitmapInterpolationModeHighQualityCubic, WICBitmapUsePremultipliedAlpha,
@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::UI::Shell::{
     IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_ICONONLY,
 };
-use windows::core::{HSTRING, Owned};
+use windows::core::{HRESULT, HSTRING, Owned};
 
 use crate::error::{self, Error};
 use crate::platform::com;
@@ -83,7 +83,11 @@ pub fn load(path: &Path) -> Result<Vec<Cached>, Error> {
 }
 
 pub fn save(path: &Path, icons: &[Cached]) -> Result<(), Error> {
-    store::write(path, &encode(icons))
+    let bytes = encode(icons).ok_or_else(|| Error::IconEncode {
+        path: path.to_owned(),
+        count: icons.len(),
+    })?;
+    store::write(path, &bytes)
 }
 
 /// The cached icon for `target` at `side` px, unless it is older than `MAX_AGE_SECONDS` at `now`.
@@ -144,21 +148,39 @@ fn scaled(
         )
     }
     .map_err(error::icon(target, "IWICBitmapScaler::Initialize"))?;
-    // u32 to usize widens on the only target, 64-bit Windows.
-    let mut bgra = vec![0; side as usize * side as usize * 4];
+    let bytes = byte_count(side).ok_or_else(|| Error::IconSide {
+        target: target.to_owned(),
+        side,
+    })?;
+    let mut bgra = vec![0; bytes];
     // SAFETY: a null rect copies the whole `side` square, which fills `bgra` exactly at a stride of `side * 4`.
     unsafe { scaler.CopyPixels(std::ptr::null(), side * 4, &mut bgra) }
         .map_err(error::icon(target, "IWICBitmapScaler::CopyPixels"))?;
     Ok(Pixels { side, bgra })
 }
 
+/// How `SHCreateItemFromParsingName` says a target is gone, as a cached file or app can be since it was listed.
+const GONE: [HRESULT; 2] = [
+    ERROR_FILE_NOT_FOUND.to_hresult(),
+    ERROR_PATH_NOT_FOUND.to_hresult(),
+];
+
 /// The icon the shell shows for `target`, at most `size` px square, as a 32-bit bitmap with premultiplied alpha.
+/// A target the shell cannot find is `Error::NoItem`.
 pub fn icon(target: &str, size: i32) -> Result<Owned<HBITMAP>, Error> {
     com()?;
     // SAFETY: COM is initialized on this thread and the name is a temporary HSTRING that outlives the call.
     let factory: IShellItemImageFactory =
-        unsafe { SHCreateItemFromParsingName(&HSTRING::from(target), None) }
-            .map_err(error::icon(target, "SHCreateItemFromParsingName"))?;
+        unsafe { SHCreateItemFromParsingName(&HSTRING::from(target), None) }.map_err(|source| {
+            if GONE.contains(&source.code()) {
+                Error::NoItem {
+                    target: target.to_owned(),
+                    source,
+                }
+            } else {
+                error::icon(target, "SHCreateItemFromParsingName")(source)
+            }
+        })?;
     // SAFETY: `factory` is a live COM object.
     let bitmap = unsafe { factory.GetImage(SIZE { cx: size, cy: size }, SIIGBF_ICONONLY) }
         .map_err(error::icon(target, "IShellItemImageFactory::GetImage"))?;
@@ -236,18 +258,18 @@ fn opaque_extent(pixels: &[u8], stride: usize) -> usize {
 }
 
 /// `MAGIC`, the count, then per icon: the target's length and UTF-8, `fetched`, `side`, and the pixels. Little-endian.
-pub(crate) fn encode(icons: &[Cached]) -> Vec<u8> {
+/// `None` when the count or a target's length is past a u32.
+pub(crate) fn encode(icons: &[Cached]) -> Option<Vec<u8>> {
     let mut bytes = MAGIC.to_vec();
-    // At most `LIMIT` icons, each target a shell path, so both lengths fit a u32.
-    bytes.extend((icons.len() as u32).to_le_bytes());
+    bytes.extend(u32::try_from(icons.len()).ok()?.to_le_bytes());
     for icon in icons {
-        bytes.extend((icon.target.len() as u32).to_le_bytes());
+        bytes.extend(u32::try_from(icon.target.len()).ok()?.to_le_bytes());
         bytes.extend(icon.target.as_bytes());
         bytes.extend(icon.fetched.0.to_le_bytes());
         bytes.extend(icon.pixels.side().to_le_bytes());
         bytes.extend(icon.pixels.bgra());
     }
-    bytes
+    Some(bytes)
 }
 
 /// What `encode` wrote, or `None` for anything else.
@@ -277,11 +299,13 @@ fn u32_at(bytes: &[u8]) -> Option<(u32, &[u8])> {
 
 #[cfg(test)]
 mod tests {
-    use windows::Win32::Graphics::Gdi::CreateBitmap;
+    use windows::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDIBSection, DIB_RGB_COLORS,
+    };
 
     use super::*;
 
-    fn icon(target: &str, fetched: u64, side: u32) -> Cached {
+    fn cached(target: &str, fetched: u64, side: u32) -> Cached {
         Cached {
             target: target.to_owned(),
             fetched: UnixSeconds(fetched),
@@ -305,20 +329,21 @@ mod tests {
 
     #[test]
     fn icons_decode_to_what_was_encoded() {
-        let icons = vec![icon("a", 1, 2), icon("ü", 3, 0)];
-        assert_eq!(decode(&encode(&icons)), Some(icons));
+        let icons = vec![cached("a", 1, 2), cached("ü", 3, 0)];
+        assert_eq!(encode(&icons).and_then(|bytes| decode(&bytes)), Some(icons));
     }
 
     #[test]
-    fn a_truncated_or_padded_cache_does_not_decode() {
-        let bytes = encode(&[icon("a", 1, 2)]);
+    fn a_truncated_or_padded_cache_does_not_decode() -> Result<(), &'static str> {
+        let bytes = encode(&[cached("a", 1, 2)]).ok_or("encoding failed")?;
         assert_eq!(bytes.split_last().and_then(|(_, rest)| decode(rest)), None);
         assert_eq!(decode(&[bytes.as_slice(), &[0]].concat()), None);
         assert_eq!(decode(b"carric00\0\0\0\0"), None);
+        Ok(())
     }
 
     #[test]
-    fn an_unreadable_cache_names_its_path() -> Result<(), std::io::Error> {
+    fn an_invalid_cache_names_its_path() -> Result<(), std::io::Error> {
         let path = std::env::temp_dir().join(format!(
             "carronade-icons-invalid-{}.bin",
             std::process::id()
@@ -335,7 +360,7 @@ mod tests {
 
     #[test]
     fn find_skips_icons_of_another_size_or_too_old() {
-        let icons = [icon("a", 100, 2)];
+        let icons = [cached("a", 100, 2)];
         let at = |seconds: u64| UnixSeconds(100 + seconds);
         assert!(find(&icons, "a", 2, at(MAX_AGE_SECONDS - 1)).is_some());
         assert!(find(&icons, "a", 2, at(MAX_AGE_SECONDS)).is_none());
@@ -346,8 +371,8 @@ mod tests {
     #[test]
     fn fetched_icons_replace_and_lead_the_previous_ones() {
         let merged = merged(
-            vec![icon("b", 9, 1), icon("c", 9, 1)],
-            vec![icon("a", 1, 1), icon("b", 1, 1)],
+            vec![cached("b", 9, 1), cached("c", 9, 1)],
+            vec![cached("a", 1, 1), cached("b", 1, 1)],
         );
         assert_eq!(targets(&merged), ["b", "c", "a"]);
         assert_eq!(
@@ -358,49 +383,77 @@ mod tests {
 
     #[test]
     fn merging_keeps_at_most_the_limit() {
-        let previous = (0..LIMIT + 5).map(|n| icon(&n.to_string(), 1, 0)).collect();
+        let previous = (0..LIMIT + 5)
+            .map(|n| cached(&n.to_string(), 1, 0))
+            .collect();
         assert_eq!(merged(vec![], previous).len(), LIMIT);
     }
 
-    /// A `width` px wide 32-bit image with `alpha` at each `(x, y)` and 0 elsewhere.
-    fn image(width: usize, height: usize, alpha: u8, at: &[(usize, usize)]) -> Vec<u8> {
-        let mut pixels = vec![0; width * height * 4];
-        for (x, y) in at {
-            if let Some(byte) = pixels.get_mut((y * width + x) * 4 + 3) {
-                *byte = alpha;
+    /// The `opaque_extent` of an 8 px square 32-bit image with `alpha` at each `(x, y)` and 0 elsewhere, or `None` for
+    /// a point outside it.
+    fn extent(alpha: u8, at: &[(usize, usize)]) -> Option<usize> {
+        let mut pixels = vec![0; 8 * 8 * 4];
+        for &(x, y) in at {
+            if x >= 8 {
+                return None;
             }
+            *pixels.get_mut((y * 8 + x) * 4 + 3)? = alpha;
         }
-        pixels
+        Some(opaque_extent(&pixels, 8 * 4))
     }
 
     #[test]
-    fn a_bitmap_without_32_bit_pixels_names_its_target() {
-        // SAFETY: a 1 px monochrome bitmap with no initial bits.
-        let bitmap = unsafe { CreateBitmap(1, 1, 1, 1, None) };
-        // SAFETY: `bitmap` came from `CreateBitmap` and nothing else holds it.
+    fn a_bitmap_without_32_bit_pixels_names_its_target() -> windows::core::Result<()> {
+        let header = BITMAPINFOHEADER {
+            // A BITMAPINFOHEADER is 40 bytes.
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: 1,
+            biHeight: 1,
+            biPlanes: 1,
+            biBitCount: 8,
+            biCompression: BI_RGB.0,
+            // BITMAPINFO holds one color, so the table must not claim the 256 an 8-bit DIB defaults to.
+            biClrUsed: 1,
+            ..Default::default()
+        };
+        let info = BITMAPINFO {
+            bmiHeader: header,
+            ..Default::default()
+        };
+        let mut bits = std::ptr::null_mut();
+        // SAFETY: `info` describes an 8-bit DIB with a one-color table, and `bits` is a live local the call fills.
+        let bitmap = unsafe {
+            CreateDIBSection(
+                None,
+                &raw const info,
+                DIB_RGB_COLORS,
+                &raw mut bits,
+                None,
+                0,
+            )
+        }?;
+        // SAFETY: `bitmap` came from `CreateDIBSection` and nothing else holds it.
         let bitmap = unsafe { Owned::new(bitmap) };
-        let result = opaque_side("mono", &bitmap);
+        let result = opaque_side("8-bit", &bitmap);
         assert!(
-            matches!(&result, Err(Error::IconBitmap { target }) if target == "mono"),
+            matches!(&result, Err(Error::IconBitmap { target }) if target == "8-bit"),
             "got {result:?}"
         );
+        Ok(())
     }
 
     #[test]
     fn the_extent_is_the_longer_side_of_the_opaque_box() {
-        let pixels = image(8, 8, 255, &[(2, 3), (5, 4)]);
-        assert_eq!(opaque_extent(&pixels, 32), 4);
+        assert_eq!(extent(255, &[(2, 3), (5, 4)]), Some(4));
     }
 
     #[test]
-    fn translucent_pixels_are_not_counted() {
-        let pixels = image(8, 8, 66, &[(0, 0), (7, 7)]);
-        assert_eq!(opaque_extent(&pixels, 32), 0);
+    fn pixels_below_half_opaque_are_not_counted() {
+        assert_eq!(extent(127, &[(0, 0), (7, 7)]), Some(0));
     }
 
     #[test]
     fn a_single_opaque_pixel_spans_one() {
-        let pixels = image(8, 8, 128, &[(6, 1)]);
-        assert_eq!(opaque_extent(&pixels, 32), 1);
+        assert_eq!(extent(128, &[(6, 1)]), Some(1));
     }
 }

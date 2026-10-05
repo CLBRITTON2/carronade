@@ -8,10 +8,15 @@ use serde::{Deserialize, Serialize};
 use crate::error::Error;
 use crate::store::{self, UnixSeconds};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct History {
     used: Vec<Use>,
+}
+
+#[derive(Serialize)]
+struct HistoryRef<'a> {
+    used: &'a [Use],
 }
 
 /// The history carronade 0.3.0 and earlier saved: keys, most recent first, without counts.
@@ -69,8 +74,8 @@ fn counted(order: Order, now: UnixSeconds) -> Vec<Use> {
         .collect()
 }
 
-pub fn save(path: &Path, used: Vec<Use>) -> Result<(), Error> {
-    store::save(path, VERSION, &History { used })
+pub fn save(path: &Path, used: &[Use]) -> Result<(), Error> {
+    store::save(path, VERSION, &HistoryRef { used })
 }
 
 /// The most uses a history counts in all before `aged` halves them.

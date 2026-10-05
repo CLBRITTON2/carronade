@@ -40,6 +40,12 @@ pub enum Error {
     Stdin(#[source] std::io::Error),
     #[error("writing the selection to stdout failed")]
     Stdout(#[source] std::io::Error),
+    #[error("writing the {what} to stdout failed")]
+    Print {
+        what: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("{call} failed")]
     Win32 {
         call: &'static str,
@@ -87,8 +93,20 @@ pub enum Error {
         #[source]
         source: windows::core::Error,
     },
+    #[error("the shell has no item {target:?}")]
+    NoItem {
+        target: String,
+        #[source]
+        source: windows::core::Error,
+    },
     #[error("the shell's icon of {target:?} is not a 32-bit bitmap")]
     IconBitmap { target: String },
+    #[error("the icon of {target:?} at {side} px is too large to hold")]
+    IconSide { target: String, side: u32 },
+    #[error(
+        "encoding {count} icons into {path:?} failed, a count or a target is too long for the format"
+    )]
+    IconEncode { path: PathBuf, count: usize },
     #[error("reading {path:?} failed")]
     StoreRead {
         path: PathBuf,

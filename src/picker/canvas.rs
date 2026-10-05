@@ -20,7 +20,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
-    AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, DeleteDC, HBITMAP, HDC,
+    AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, CreateCompatibleDC, DeleteDC, HBITMAP, HDC,
 };
 use windows::Win32::Graphics::Imaging::{
     GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapDitherTypeNone,
@@ -31,7 +31,7 @@ use windows::core::{HSTRING, Owned, w};
 use windows_numerics::Matrix3x2;
 
 use crate::config::{Color, Config, Length};
-use crate::error::{Error, win32};
+use crate::error::{Error, last, win32};
 use crate::icons::Pixels;
 use crate::layout::{Layout, Rect};
 
@@ -63,7 +63,23 @@ pub(super) struct Canvas {
 }
 
 /// A `CreateCompatibleDC` device context, deleted on drop. Drop cannot report a failed `DeleteDC`.
-pub(super) struct MemoryDc(pub(super) HDC);
+pub(super) struct MemoryDc(HDC);
+
+impl MemoryDc {
+    /// A memory DC compatible with the screen.
+    pub(super) fn new() -> Result<Self, Error> {
+        // SAFETY: a null DC asks for one compatible with the screen.
+        let dc = unsafe { CreateCompatibleDC(None) };
+        if dc.is_invalid() {
+            return Err(last("CreateCompatibleDC"));
+        }
+        Ok(Self(dc))
+    }
+
+    pub(super) fn hdc(&self) -> HDC {
+        self.0
+    }
+}
 
 impl Drop for MemoryDc {
     fn drop(&mut self) {
@@ -165,7 +181,7 @@ impl Canvas {
             text.HitTestTextPosition(caret as u32, false, &raw mut x, &raw mut y, &raw mut hit)
         }
         .map_err(win32("IDWriteTextLayout::HitTestTextPosition"))?;
-        let scroll = (x - (entry.right - entry.left)).max(0.0);
+        let scroll = caret_scroll(x, entry.right - entry.left);
         // SAFETY: the color is a stack value read during the call, and `brush` lives as long as `self`.
         unsafe { self.brush.SetColor(&d2d_color(self.config.input.color)) };
         // SAFETY: called while drawing, and popped below before the frame ends.
@@ -236,7 +252,7 @@ impl Canvas {
                 None,
                 Some(&raw const self.origin),
                 Some(&raw const size),
-                Some(self.dc.0),
+                Some(self.dc.hdc()),
                 Some(&raw const corner),
                 COLORREF::default(),
                 Some(&raw const blend),
@@ -398,15 +414,22 @@ pub(super) fn image(
 
 /// `rect` with corners of `radius`, kept small enough to fit.
 pub(super) fn rounded(rect: Rect, radius: f32) -> D2D1_ROUNDED_RECT {
-    let radius = radius
-        .min((rect.right - rect.left) / 2.0)
-        .min((rect.bottom - rect.top) / 2.0)
-        .max(0.0);
+    let radius = fitted_radius(radius, rect.right - rect.left, rect.bottom - rect.top);
     D2D1_ROUNDED_RECT {
         rect: d2d_rect(rect),
         radiusX: radius,
         radiusY: radius,
     }
+}
+
+/// `radius`, at most half of `width` and of `height`, and never below 0.
+fn fitted_radius(radius: f32, width: f32, height: f32) -> f32 {
+    radius.min(width / 2.0).min(height / 2.0).max(0.0)
+}
+
+/// How far text scrolls left to keep a caret `caret` px from its start in view in an entry `width` px wide.
+fn caret_scroll(caret: f32, width: f32) -> f32 {
+    (caret - width).max(0.0)
 }
 
 pub(super) fn d2d_rect(rect: Rect) -> D2D_RECT_F {
@@ -424,5 +447,25 @@ pub(super) fn d2d_color(color: Color) -> D2D1_COLOR_F {
         g: color.green,
         b: color.blue,
         a: color.alpha,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_radius_shrinks_to_fit_its_rect_and_never_goes_negative() {
+        assert_eq!(fitted_radius(4.0, 20.0, 30.0), 4.0);
+        assert_eq!(fitted_radius(40.0, 20.0, 30.0), 10.0);
+        assert_eq!(fitted_radius(40.0, 30.0, 20.0), 10.0);
+        assert_eq!(fitted_radius(4.0, -2.0, 30.0), 0.0);
+    }
+
+    #[test]
+    fn text_scrolls_only_once_the_caret_passes_the_entry() {
+        assert_eq!(caret_scroll(50.0, 100.0), 0.0);
+        assert_eq!(caret_scroll(100.0, 100.0), 0.0);
+        assert_eq!(caret_scroll(130.0, 100.0), 30.0);
     }
 }

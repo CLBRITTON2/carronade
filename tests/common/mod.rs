@@ -25,7 +25,10 @@ pub fn turn() -> MutexGuard<'static, ()> {
     ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-const TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a picker gets to show its window or exit: far above the ~300 ms an uncached list takes, for a busy runner.
+const WINDOW_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often the harness checks for the window or the exit, short against a picker's ~100 ms startup.
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/config.toml");
 
 pub fn carronade(config: &str) -> Command {
@@ -134,10 +137,10 @@ impl Picker {
             if let Some(status) = child.try_wait()? {
                 break status;
             }
-            if start.elapsed() > TIMEOUT {
+            if start.elapsed() > WINDOW_TIMEOUT {
                 return Err("carronade did not exit".into());
             }
-            sleep(Duration::from_millis(20));
+            sleep(POLL_INTERVAL);
         };
         Ok(Exit {
             code: status.code(),
@@ -158,7 +161,7 @@ fn read_all(pipe: impl Read) -> Result<String, Box<dyn Error>> {
 /// The visible carronade window that `pid` owns, polled for until it shows.
 fn picker_window(pid: u32) -> Result<HWND, Box<dyn Error>> {
     let start = Instant::now();
-    while start.elapsed() < TIMEOUT {
+    while start.elapsed() < WINDOW_TIMEOUT {
         let mut after = None;
         // SAFETY: the class name is a static wide string, and `after` is a window this search returned or none.
         while let Ok(window) = unsafe { FindWindowExW(None, after, w!("carronade"), None) } {
@@ -171,7 +174,7 @@ fn picker_window(pid: u32) -> Result<HWND, Box<dyn Error>> {
             }
             after = Some(window);
         }
-        sleep(Duration::from_millis(20));
+        sleep(POLL_INTERVAL);
     }
     Err(format!("no carronade window for process {pid}").into())
 }

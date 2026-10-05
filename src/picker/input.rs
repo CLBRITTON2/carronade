@@ -3,7 +3,7 @@
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME,
-    VK_LEFT, VK_N, VK_P, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP, VK_V,
+    VK_LEFT, VK_MENU, VK_N, VK_P, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN,
@@ -53,7 +53,8 @@ pub(super) extern "system" fn window_proc(
 
 /// Handles the keys that steer the picker or edit the query, returning false for the rest.
 fn key(key: VIRTUAL_KEY) -> Result<bool, Error> {
-    let (ctrl, shift) = (held(VK_CONTROL), held(VK_SHIFT));
+    // AltGr arrives as Ctrl+Alt, and its characters must not read as Ctrl shortcuts.
+    let (ctrl, shift) = (held(VK_CONTROL) && !held(VK_MENU), held(VK_SHIFT));
     let context = with(|state| KeyContext {
         ctrl,
         shift,
@@ -184,16 +185,32 @@ fn on_selected(action: fn(usize) -> Action<usize>) -> Result<(), Error> {
 /// Inserts a typed UTF-16 unit. Control characters, which Backspace and Enter also type, insert nothing, and neither
 /// does an orphan surrogate.
 fn typed(unit: u16) -> Result<(), Error> {
-    let units = with(|state| match (state.surrogate.take(), unit) {
-        (_, 0xd800..=0xdbff) => {
-            state.surrogate = Some(unit);
-            Vec::new()
+    let text = with(|state| match pair(state.surrogate.take(), unit) {
+        Typed::High(high) => {
+            state.surrogate = Some(high);
+            String::new()
         }
+        Typed::Text(text) => text,
+    })?;
+    edit(|line| line.insert(&text))
+}
+
+/// What a typed UTF-16 unit gives.
+#[derive(Debug, PartialEq, Eq)]
+enum Typed {
+    /// A high surrogate, held until its low half arrives.
+    High(u16),
+    Text(String),
+}
+
+/// What typing `unit` gives after the held high surrogate `pending`. An orphan surrogate gives no text.
+fn pair(pending: Option<u16>, unit: u16) -> Typed {
+    let units = match (pending, unit) {
+        (_, 0xd800..=0xdbff) => return Typed::High(unit),
         (Some(high), _) => vec![high, unit],
         (None, _) => vec![unit],
-    })?;
-    let text: String = char::decode_utf16(units).filter_map(Result::ok).collect();
-    edit(|line| line.insert(&text))
+    };
+    Typed::Text(char::decode_utf16(units).filter_map(Result::ok).collect())
 }
 
 /// Applies `change` to the query, filtering again when its text changed.
@@ -244,8 +261,8 @@ fn hovered(at: (i16, i16)) -> Result<(), Error> {
             .canvas
             .layout
             .cell_at(f32::from(at.0), f32::from(at.1))
-            .map(|slot| menu::first(state.cursor, state.page()) + slot)
-            .filter(|&row| row < state.shown.len() && row != state.cursor);
+            .and_then(|slot| menu::row_at(state.cursor, state.page(), slot, state.shown.len()))
+            .filter(|&row| row != state.cursor);
         if let Some(row) = row {
             state.cursor = row;
         }
@@ -260,11 +277,8 @@ fn clicked(x: f32, y: f32) -> Result<(), Error> {
     }
     let choice = with(|state| {
         let slot = state.canvas.layout.cell_at(x, y)?;
-        let row = menu::first(state.cursor, state.page()) + slot;
-        state
-            .shown
-            .get(row)
-            .map(|_| menu::accept(&state.shown, row, ""))
+        let row = menu::row_at(state.cursor, state.page(), slot, state.shown.len())?;
+        state.shown.get(row).map(|&index| Choice::Item(index))
     })?;
     match choice {
         Some(choice) => finish(Ok(Action::Pick(choice))),
@@ -344,6 +358,17 @@ mod tests {
             key_action(VK_RIGHT, &context(true, false)),
             Some(KeyAction::Right)
         );
+    }
+
+    #[test]
+    fn a_surrogate_pair_types_one_character_and_an_orphan_types_nothing() {
+        let text = |text: &str| Typed::Text(text.to_owned());
+        assert_eq!(pair(None, u16::from(b'a')), text("a"));
+        assert_eq!(pair(None, 0xd83d), Typed::High(0xd83d));
+        assert_eq!(pair(Some(0xd83d), 0xde00), text("\u{1f600}"));
+        assert_eq!(pair(None, 0xde00), text(""));
+        assert_eq!(pair(Some(0xd83d), u16::from(b'a')), text("a"));
+        assert_eq!(pair(Some(0xd83d), 0xd83e), Typed::High(0xd83e));
     }
 
     #[test]

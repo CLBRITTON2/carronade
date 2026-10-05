@@ -45,6 +45,7 @@ pub fn launch_in(program: &str, folder: &Path) -> Result<(), Error> {
 }
 
 /// What the shell does with a target.
+#[derive(Clone, Copy, Debug)]
 enum Verb {
     /// The target's default verb, which for a program is to start it.
     Default,

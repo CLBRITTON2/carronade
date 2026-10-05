@@ -26,8 +26,9 @@ fn config_error(name: &str, from: &str, to: &str) -> Result<String, Box<dyn Erro
         .arg("dmenu")
         .stdin(Stdio::null())
         .output()?;
-    assert_eq!(output.status.code(), Some(2));
-    Ok(String::from_utf8(output.stderr)?)
+    let stderr = String::from_utf8(output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    Ok(stderr)
 }
 
 fn dmenu(items: &str) -> Result<Picker, Box<dyn Error>> {
@@ -135,10 +136,10 @@ fn typing_resets_the_cursor_to_the_first_match() -> Outcome {
 #[test]
 fn words_match_in_any_order() -> Outcome {
     let _turn = turn();
-    let picker = dmenu("windows terminal\nterminal preview\n")?;
-    picker.type_query("term win")?;
+    let picker = dmenu("harbor charts\ncharts preview\n")?;
+    picker.type_query("chart harb")?;
     picker.press(VK_RETURN)?;
-    picked(&picker.exit()?, "windows terminal");
+    picked(&picker.exit()?, "harbor charts");
     Ok(())
 }
 
@@ -194,7 +195,10 @@ fn losing_focus_cancels() -> Outcome {
     let first = dmenu("alpha\n")?;
     let second = dmenu("beta\n")?;
     let exit = first.exit()?;
-    assert_eq!((exit.code, exit.stdout.as_str()), (Some(1), ""));
+    assert_eq!(
+        (exit.code, exit.stdout.as_str(), exit.stderr.as_str()),
+        (Some(1), "", "")
+    );
     second.press(VK_ESCAPE)?;
     second.exit()?;
     Ok(())
@@ -205,7 +209,11 @@ fn enter_on_empty_input_cancels() -> Outcome {
     let _turn = turn();
     let picker = dmenu("")?;
     picker.press(VK_RETURN)?;
-    assert_eq!(picker.exit()?.code, Some(1));
+    let exit = picker.exit()?;
+    assert_eq!(
+        (exit.code, exit.stdout.as_str(), exit.stderr.as_str()),
+        (Some(1), "", "")
+    );
     Ok(())
 }
 
@@ -241,26 +249,53 @@ fn backspace_removes_the_character_before_the_caret() -> Outcome {
 #[test]
 fn unknown_mode_fails_with_usage() -> Outcome {
     let output = carronade(CONFIG).arg("show").output()?;
-    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert_eq!(
-        String::from_utf8(output.stderr)?,
-        format!(
-            "carronade: usage: carronade [--config <path>] <dmenu|apps|files>, got {:?}\n",
-            ["--config", CONFIG, "show"]
-        )
+        stderr,
+        "carronade: \"show\" is not a mode, use apps, files or dmenu\n\nRun carronade --help for usage.\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn no_arguments_print_the_usage_and_fail() -> Outcome {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_carronade")).output()?;
+    let stderr = String::from_utf8(output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.starts_with(
+            "carronade: a mode is required\n\nUsage: carronade [--config <path>] <mode>\n"
+        ),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn help_prints_the_version_and_usage() -> Outcome {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_carronade"))
+        .arg("--help")
+        .output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    let version = concat!("carronade ", env!("CARGO_PKG_VERSION"), "\n");
+    assert!(stdout.starts_with(version), "{stdout}");
+    assert!(
+        stdout.contains("\nUsage: carronade [--config <path>] <mode>\n"),
+        "{stdout}"
     );
     Ok(())
 }
 
 #[test]
 fn a_missing_config_is_named_in_the_error() -> Outcome {
-    let output = carronade("C:/carronade/missing.toml")
-        .arg("dmenu")
-        .output()?;
-    assert_eq!(output.status.code(), Some(2));
+    let path = format!("{}/missing.toml", env!("CARGO_TARGET_TMPDIR"));
+    let output = carronade(&path).arg("dmenu").output()?;
     let stderr = String::from_utf8(output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(
-        stderr.starts_with("carronade: reading the config \"C:/carronade/missing.toml\" failed: "),
+        stderr.starts_with(&format!("carronade: reading the config {path:?} failed: ")),
         "{stderr}"
     );
     Ok(())
@@ -281,8 +316,8 @@ fn items_that_are_not_utf8_are_an_error() -> Outcome {
         .ok_or("carronade has no stdin")?
         .write_all(b"alpha\n\xff\n")?;
     let output = child.wait_with_output()?;
-    assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(
         stderr.starts_with("carronade: reading items from stdin failed: "),
         "{stderr}"
@@ -294,7 +329,7 @@ fn items_that_are_not_utf8_are_an_error() -> Outcome {
 fn an_unknown_config_field_is_an_error() -> Outcome {
     let stderr = config_error("unknown_field", "[list]", "[list]\ncycle = true")?;
     assert!(
-        stderr.contains("is invalid") && stderr.contains("cycle"),
+        stderr.contains("is invalid") && stderr.contains("unknown field `cycle`"),
         "{stderr}"
     );
     Ok(())
@@ -369,15 +404,14 @@ fn a_window_too_large_to_allocate_is_an_error() -> Outcome {
 
 #[test]
 fn a_missing_image_is_an_error() -> Outcome {
+    let image = format!("{}\\missing.png", env!("CARGO_TARGET_TMPDIR"));
     let stderr = config_error(
         "missing_image",
         "# image = ",
-        "image = 'C:\\carronade\\missing.png'\n# ",
+        &format!("image = '{image}'\n# "),
     )?;
     assert!(
-        stderr.starts_with(
-            "carronade: loading the image \"C:\\\\carronade\\\\missing.png\" failed: "
-        ),
+        stderr.starts_with(&format!("carronade: loading the image {image:?} failed: ")),
         "{stderr}"
     );
     Ok(())

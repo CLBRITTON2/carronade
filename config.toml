@@ -2,13 +2,13 @@
 # Lengths are "<n>px", scaled with the monitor's DPI, or "<n>em", a multiple of the font size.
 # Colors are "#rrggbb" or "#rrggbbaa".
 
-# size is in points, from 4 to 72.
+# family is a DirectWrite font family name, as Windows lists installed fonts. size is in points, from 4 to 72.
 [font]
 family = "Segoe UI"
 size = 11
 
-# The popup. image, the only optional field, is cover-scaled behind everything else. A path in image or files.roots
-# is absolute or starts with ~ for your profile folder.
+# The popup. border is the outline's width, drawn in border_color. image, the only optional field, is cover-scaled
+# behind everything else. A path in image or files.roots is absolute or starts with ~ for your profile folder.
 [window]
 width = "40em"
 background = "#202020"
@@ -19,6 +19,7 @@ radius = "0.5em"
 
 # The text box at the top. prompt is drawn left of the typed text in prompt_font. apps and files draw files_icon or
 # apps_icon at its right end, in prompt_font and placeholder_color: a click on it, or Tab, switches to the other list.
+# prompt_gap separates the typed text from the prompt and from that icon.
 [input]
 margin = "1em"
 padding = "0.75em"
@@ -33,7 +34,8 @@ placeholder_color = "#ffffff80"
 apps_icon = "Apps"
 files_icon = "Files"
 
-# The grid of matches below the text box, filled column by column. columns and lines run from 1 to 64.
+# The grid of matches below the text box, filled column by column. spacing separates its cells. columns and lines run
+# from 1 to 64, and a page holds columns times lines matches.
 [list]
 background = "#00000000"
 padding = "1em"
@@ -41,8 +43,9 @@ spacing = "0.25em"
 columns = 1
 lines = 8
 
-# One match: its icon, then its label, with the letters the query matched in highlight. icon is the icon's side, from
-# 1px to 256px or 0.25em to 4em.
+# One match: its icon, then its label, with the letters the query matched in highlight. selected is the background of
+# the selected match. icon is the icon's side, from 1px to 256px or 0.25em to 4em, and a command's glyph is drawn at
+# 0.6 of it.
 [element]
 padding = "0.5em"
 radius = "0.5em"

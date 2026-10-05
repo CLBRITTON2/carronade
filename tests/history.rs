@@ -16,13 +16,13 @@ fn history_path(name: &str) -> PathBuf {
 #[test]
 fn uses_load_back_as_saved() -> Result<(), Box<dyn Error>> {
     let path = history_path("history-round-trip");
-    history::save(&path, history::used(&[], "first", UnixSeconds(100)))?;
+    history::save(&path, &history::used(&[], "first", UnixSeconds(100)))?;
     let uses = history::used(
         &history::load(&path, UnixSeconds(200))?,
         "second",
         UnixSeconds(200),
     );
-    history::save(&path, uses.clone())?;
+    history::save(&path, &uses)?;
     assert_eq!(history::load(&path, UnixSeconds(300))?, uses);
     Ok(())
 }
@@ -44,7 +44,7 @@ fn a_history_of_0_3_0_loads_one_use_each_a_second_apart() -> Result<(), Box<dyn 
 #[test]
 fn a_saved_history_starts_with_its_version() -> Result<(), Box<dyn Error>> {
     let path = history_path("history-versioned");
-    history::save(&path, history::used(&[], "a", UnixSeconds(100)))?;
+    history::save(&path, &history::used(&[], "a", UnixSeconds(100)))?;
     assert!(std::fs::read_to_string(&path)?.starts_with("version = 1\n"));
     Ok(())
 }

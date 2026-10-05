@@ -23,6 +23,6 @@ pub(crate) fn known_folder(id: &GUID) -> Result<PathBuf, Error> {
     // SAFETY: the shell returned `folder` NUL-terminated and it is still allocated.
     let text = unsafe { folder.to_string() };
     // SAFETY: the shell allocated `folder` with the COM allocator and nothing reads it after this.
-    unsafe { CoTaskMemFree(Some(folder.0 as _)) };
+    unsafe { CoTaskMemFree(Some(folder.0.cast_const().cast())) };
     Ok(PathBuf::from(text.map_err(utf16("a known folder's path"))?))
 }

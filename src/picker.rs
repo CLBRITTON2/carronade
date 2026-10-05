@@ -21,9 +21,8 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
-    GetMonitorInfoW, HBITMAP, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-    SelectObject,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDIBSection, DIB_RGB_COLORS, GetMonitorInfoW,
+    HBITMAP, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SelectObject,
 };
 use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
@@ -86,6 +85,7 @@ impl Row for String {
 }
 
 /// What goes beside a row's label.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Picture {
     /// A shell target, shown with the icon the shell has for it.
     Shell(String),
@@ -97,6 +97,7 @@ pub enum Picture {
 const GLYPH_FONT: &str = "Segoe MDL2 Assets";
 
 /// What the person did in the picker.
+#[derive(Debug)]
 pub enum Action<T> {
     Pick(Choice<T>),
     /// Tab or a click on the switch icon.
@@ -108,6 +109,7 @@ pub enum Action<T> {
 }
 
 /// What `browse` does after an `Action`.
+#[derive(Debug)]
 pub enum Step<T, R> {
     Done(R),
     /// Replaces the items and the switch icon in the same window, filtered by the query typed so far.
@@ -121,6 +123,8 @@ pub enum Step<T, R> {
 enum Icon {
     Unloaded(String),
     Loaded(ID2D1Bitmap),
+    /// The shell has no item for the target, as for a cached entry deleted since it was listed.
+    Gone,
     Glyph(char),
 }
 
@@ -312,12 +316,12 @@ fn prepare(config: Config) -> Result<Prepared, Error> {
         unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
             .map_err(win32("CoCreateInstance(WICImagingFactory)"))?;
     let formats = formats(&dwrite, &config, em, scale)?;
-    let typed = measure(&dwrite, &formats.text, &config.input.placeholder)?;
+    let placeholder = measure(&dwrite, &formats.text, &config.input.placeholder)?;
     let prompted = measure(&dwrite, &formats.prompt, &config.input.prompt)?;
     let apps_icon = measure(&dwrite, &formats.prompt, &config.input.apps_icon)?;
     let files_icon = measure(&dwrite, &formats.prompt, &config.input.files_icon)?;
     let measured = layout::Measured {
-        line: typed.height.max(prompted.height),
+        line: placeholder.height.max(prompted.height),
         prompt: prompted.widthIncludingTrailingWhitespace,
         switch: apps_icon.width.max(files_icon.width),
     };
@@ -562,13 +566,9 @@ fn surface(d2d: &ID2D1Factory, width: i32, height: i32) -> Result<Surface, Error
     .map_err(|_| Error::Surface { width, height })?;
     // SAFETY: `section` is a fresh bitmap nothing else owns, so `Owned` deletes it once.
     let dib = unsafe { Owned::new(section) };
-    // SAFETY: a null DC asks for one compatible with the screen.
-    let dc = MemoryDc(unsafe { CreateCompatibleDC(None) });
-    if dc.0.is_invalid() {
-        return Err(last("CreateCompatibleDC"));
-    }
+    let dc = MemoryDc::new()?;
     // SAFETY: both handles are valid, and `dc` drops before `dib`, so the bitmap is never deleted while selected.
-    if unsafe { SelectObject(dc.0, (*dib).into()) }.is_invalid() {
+    if unsafe { SelectObject(dc.hdc(), (*dib).into()) }.is_invalid() {
         return Err(last("SelectObject"));
     }
     let properties = D2D1_RENDER_TARGET_PROPERTIES {
@@ -593,7 +593,7 @@ fn surface(d2d: &ID2D1Factory, width: i32, height: i32) -> Result<Surface, Error
         bottom: height,
     };
     // SAFETY: `dc` holds the DIB the size of `bounds`, and `Surface` keeps both alive as long as `target`.
-    unsafe { target.BindDC(dc.0, &raw const bounds) }
+    unsafe { target.BindDC(dc.hdc(), &raw const bounds) }
         .map_err(win32("ID2D1DCRenderTarget::BindDC"))?;
     // ClearType needs an opaque background to blend against.
     // SAFETY: `target` is live and the mode a defined constant.
@@ -666,7 +666,15 @@ fn render() -> Result<(), Error> {
             pixels
         } else {
             // Outside the borrow: the shell pumps messages while it loads.
-            let pixels = icons::fetch(&wic, &target, side)?;
+            let pixels = match icons::fetch(&wic, &target, side) {
+                Ok(pixels) => pixels,
+                // The relist after the picker closes drops it from the cache.
+                Err(Error::NoItem { .. }) => {
+                    with(|state| state.set_icon(index, Icon::Gone))?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let fetched = Cached {
                 target,
                 fetched: now,
@@ -679,7 +687,7 @@ fn render() -> Result<(), Error> {
             state
                 .canvas
                 .bitmap(&pixels)
-                .map(|bitmap| state.set_icon(index, bitmap))
+                .map(|bitmap| state.set_icon(index, Icon::Loaded(bitmap)))
         })??;
     }
     with(State::draw)?
@@ -723,9 +731,9 @@ impl State {
         self.switch = Some(switch);
     }
 
-    fn set_icon(&mut self, index: usize, bitmap: ID2D1Bitmap) {
+    fn set_icon(&mut self, index: usize, icon: Icon) {
         if let Some(item) = self.items.get_mut(index) {
-            item.icon = Some(Icon::Loaded(bitmap));
+            item.icon = Some(icon);
         }
     }
 
@@ -865,7 +873,9 @@ impl State {
                     canvas.text(&glyph, &canvas.glyph, cell.icon, element.color);
                     cell.label
                 }
-                _ => Rect {
+                // Blank, so the label lines up with its neighbors' that have icons.
+                Some(Icon::Gone) => cell.label,
+                None | Some(Icon::Unloaded(_)) => Rect {
                     left: cell.icon.left,
                     ..cell.label
                 },
