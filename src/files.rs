@@ -44,7 +44,7 @@ pub fn list(roots: &[PathBuf]) -> Result<Vec<Entry>, Error> {
     for root in roots {
         entries.extend(below(root)?);
     }
-    entries.sort_by_key(|entry| (entry.depth, entry.label.to_lowercase()));
+    entries.sort_by_cached_key(|entry| (entry.depth, entry.label.to_lowercase()));
     Ok(entries)
 }
 

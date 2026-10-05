@@ -161,8 +161,10 @@ impl Canvas {
         let (mut x, mut y, mut hit) = (0.0, 0.0, DWRITE_HIT_TEST_METRICS::default());
         // The caret indexes a typed query, far below u32::MAX.
         // SAFETY: the out parameters are live locals, and a caret past the text is clamped by DirectWrite.
-        unsafe { text.HitTestTextPosition(caret as u32, false, &mut x, &mut y, &mut hit) }
-            .map_err(win32("IDWriteTextLayout::HitTestTextPosition"))?;
+        unsafe {
+            text.HitTestTextPosition(caret as u32, false, &raw mut x, &raw mut y, &raw mut hit)
+        }
+        .map_err(win32("IDWriteTextLayout::HitTestTextPosition"))?;
         let scroll = (x - (entry.right - entry.left)).max(0.0);
         // SAFETY: the color is a stack value read during the call, and `brush` lives as long as `self`.
         unsafe { self.brush.SetColor(&d2d_color(self.config.input.color)) };
@@ -206,7 +208,7 @@ impl Canvas {
         // SAFETY: `bgra` holds `side` rows of `side * 4` bytes, which the call copies before returning.
         unsafe {
             self.target
-                .CreateBitmap(size, Some(data), pixels.side * 4, &properties)
+                .CreateBitmap(size, Some(data), pixels.side * 4, &raw const properties)
         }
         .map_err(win32("ID2D1RenderTarget::CreateBitmap"))
     }
@@ -225,17 +227,18 @@ impl Canvas {
             SourceConstantAlpha: 255,
             AlphaFormat: AC_SRC_ALPHA as u8,
         };
+        let corner = POINT::default();
         // SAFETY: `window` is the picker's live window, `dc` holds the drawn DIB, and every pointer is a live local.
         unsafe {
             UpdateLayeredWindow(
                 self.window,
                 None,
-                Some(&self.origin),
-                Some(&size),
+                Some(&raw const self.origin),
+                Some(&raw const size),
                 Some(self.dc.0),
-                Some(&POINT::default()),
+                Some(&raw const corner),
                 COLORREF::default(),
-                Some(&blend),
+                Some(&raw const blend),
                 ULW_ALPHA,
             )
         }
@@ -251,15 +254,14 @@ pub(super) fn format(
 ) -> Result<IDWriteTextFormat, Error> {
     let mut fonts: Option<IDWriteFontCollection> = None;
     // SAFETY: `fonts` is a live local the call fills.
-    unsafe { dwrite.GetSystemFontCollection(&mut fonts, false) }
+    unsafe { dwrite.GetSystemFontCollection(&raw mut fonts, false) }
         .map_err(win32("GetSystemFontCollection"))?;
+    let fonts = fonts.ok_or(Error::NoFonts)?;
     let (mut index, mut exists) = (0, false.into());
     let name = HSTRING::from(family);
-    if let Some(fonts) = fonts {
-        // SAFETY: `name` is NUL-terminated and the out parameters are live locals.
-        unsafe { fonts.FindFamilyName(&name, &mut index, &mut exists) }
-            .map_err(win32("IDWriteFontCollection::FindFamilyName"))?;
-    }
+    // SAFETY: `name` is NUL-terminated and the out parameters are live locals.
+    unsafe { fonts.FindFamilyName(&name, &raw mut index, &raw mut exists) }
+        .map_err(win32("IDWriteFontCollection::FindFamilyName"))?;
     if !exists.as_bool() {
         return Err(Error::Font(family.to_owned()));
     }
@@ -291,7 +293,7 @@ pub(super) fn format(
     unsafe { format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) }
         .map_err(win32("SetParagraphAlignment"))?;
     // SAFETY: `trimming` is read during the call, and the format keeps its own reference to `ellipsis`.
-    unsafe { format.SetTrimming(&trimming, &ellipsis) }.map_err(win32("SetTrimming"))?;
+    unsafe { format.SetTrimming(&raw const trimming, &ellipsis) }.map_err(win32("SetTrimming"))?;
     Ok(format)
 }
 
@@ -316,7 +318,8 @@ pub(super) fn measure(
     let layout = text_layout(dwrite, format, text, 0.0)?;
     let mut metrics = DWRITE_TEXT_METRICS::default();
     // SAFETY: `metrics` is a live local the call fills.
-    unsafe { layout.GetMetrics(&mut metrics) }.map_err(win32("IDWriteTextLayout::GetMetrics"))?;
+    unsafe { layout.GetMetrics(&raw mut metrics) }
+        .map_err(win32("IDWriteTextLayout::GetMetrics"))?;
     Ok(metrics)
 }
 
@@ -346,7 +349,7 @@ pub(super) fn image(
     let frame = unsafe { decoder.GetFrame(0) }.map_err(failed)?;
     let (mut source_width, mut source_height) = (0, 0);
     // SAFETY: the out parameters are live locals.
-    unsafe { frame.GetSize(&mut source_width, &mut source_height) }.map_err(failed)?;
+    unsafe { frame.GetSize(&raw mut source_width, &raw mut source_height) }.map_err(failed)?;
     // Decoded straight to the size it covers the window at: a photo at full size is tens of MB and slow to decode.
     // Image and window sides stay well inside the range where f32 holds whole numbers exactly.
     let zoom = (width / source_width as f32).max(height / source_height as f32);
@@ -388,7 +391,7 @@ pub(super) fn image(
         ((height - size.height) / 2.0).round(),
     );
     // SAFETY: `centered` is a stack value read during the call.
-    unsafe { brush.SetTransform(&centered) };
+    unsafe { brush.SetTransform(&raw const centered) };
     Ok(brush)
 }
 

@@ -26,11 +26,13 @@ pub struct UnixSeconds(pub u64);
 
 impl UnixSeconds {
     /// The seconds from `earlier` to this, none when `earlier` is later.
+    #[must_use]
     pub fn since(self, earlier: UnixSeconds) -> u64 {
         self.0.saturating_sub(earlier.0)
     }
 
     /// `seconds` before this, the epoch at the earliest.
+    #[must_use]
     pub fn before(self, seconds: u64) -> UnixSeconds {
         UnixSeconds(self.0.saturating_sub(seconds))
     }

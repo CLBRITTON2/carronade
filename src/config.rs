@@ -120,6 +120,7 @@ pub enum Length {
 
 impl Length {
     /// Device pixels, given the font size in device pixels and the monitor's scale (1.0 at 96 DPI).
+    #[must_use]
     pub fn px(self, em: f32, scale: f32) -> f32 {
         match self {
             Length::Px(px) => px * scale,

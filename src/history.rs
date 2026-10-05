@@ -73,7 +73,11 @@ pub fn save(path: &Path, used: Vec<Use>) -> Result<(), Error> {
     store::save(path, VERSION, &History { used })
 }
 
-/// `uses` with one more use of `key` at `now`.
+/// The most uses a history counts in all before `aged` halves them.
+const MAX_TOTAL: u32 = 1_000;
+
+/// `uses` with one more use of `key` at `now`, aged once their counts pass `MAX_TOTAL`.
+#[must_use]
 pub fn used(uses: &[Use], key: &str, now: UnixSeconds) -> Vec<Use> {
     let count = uses
         .iter()
@@ -84,8 +88,26 @@ pub fn used(uses: &[Use], key: &str, now: UnixSeconds) -> Vec<Use> {
         count: count.saturating_add(1),
         last: now,
     };
-    std::iter::once(this)
-        .chain(uses.iter().filter(|other| other.key != key).cloned())
+    aged(
+        std::iter::once(this)
+            .chain(uses.iter().filter(|other| other.key != key).cloned())
+            .collect(),
+    )
+}
+
+/// `uses` with every count halved and the keys left at none dropped when the counts total more than `MAX_TOTAL`, as
+/// zoxide ages its database, so keys used rarely or long ago fall out and the history stays small.
+fn aged(uses: Vec<Use>) -> Vec<Use> {
+    let total: u64 = uses.iter().map(|this| u64::from(this.count)).sum();
+    if total <= u64::from(MAX_TOTAL) {
+        return uses;
+    }
+    uses.into_iter()
+        .map(|this| Use {
+            count: this.count / 2,
+            ..this
+        })
+        .filter(|this| this.count > 0)
         .collect()
 }
 
@@ -95,6 +117,7 @@ const BOOST: i32 = 4;
 
 /// The score each key's uses add to its matches by `now`: `BOOST` per doubling of zoxide's frecency, the count
 /// weighted by the age of the last use (<https://github.com/ajeetdsouza/zoxide/wiki/Algorithm>).
+#[must_use]
 pub fn boosts(uses: &[Use], now: UnixSeconds) -> HashMap<String, i32> {
     uses.iter()
         .map(|this| {
@@ -106,7 +129,7 @@ pub fn boosts(uses: &[Use], now: UnixSeconds) -> HashMap<String, i32> {
                 _ => 1,
             };
             let frecency = this.count.saturating_mul(weight);
-            // The log2 of a u64 is below 64.
+            // The log2 of a u32 is below 32.
             let doublings = frecency.saturating_add(1).ilog2() as i32;
             (this.key.clone(), BOOST * doublings)
         })
@@ -141,6 +164,17 @@ mod tests {
         assert_eq!(
             used(&uses, "new", NOW),
             [one("new", 1, NOW), one("a", 2, at(10)), one("b", 5, at(20))]
+        );
+    }
+
+    #[test]
+    fn a_use_past_the_total_halves_every_count_and_drops_the_single_uses() {
+        let full = MAX_TOTAL - 1;
+        let uses = [one("often", full, at(10)), one("once", 1, at(20))];
+        assert_eq!(used(&uses, "new", NOW), [one("often", full / 2, at(10))]);
+        assert_eq!(
+            used(&[one("often", full, at(10))], "once", NOW),
+            [one("once", 1, NOW), one("often", full, at(10))]
         );
     }
 

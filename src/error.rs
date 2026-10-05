@@ -16,6 +16,8 @@ pub enum Error {
     },
     #[error("the font family {0:?} is not installed")]
     Font(String),
+    #[error("DirectWrite returned no system font collection")]
+    NoFonts,
     #[error("loading the image {path:?} failed")]
     Image {
         path: PathBuf,
@@ -55,9 +57,10 @@ pub enum Error {
     },
     #[error("{path:?} is a file with no folder above it")]
     NoParent { path: PathBuf },
-    #[error("loading the icon of {target:?} failed")]
+    #[error("loading the icon of {target:?} failed in {call}")]
     Icon {
         target: String,
+        call: &'static str,
         #[source]
         source: windows::core::Error,
     },
@@ -126,7 +129,18 @@ pub fn win32(call: &'static str) -> impl FnOnce(windows::core::Error) -> Error {
     move |source| Error::Win32 { call, source }
 }
 
+/// Maps a failed call while loading the icon of `target` to `Error::Icon`, for `map_err`.
+pub fn icon(target: &str, call: &'static str) -> impl FnOnce(windows::core::Error) -> Error {
+    let target = target.to_owned();
+    move |source| Error::Icon {
+        target,
+        call,
+        source,
+    }
+}
+
 /// The calling thread's last Win32 error, for calls that report failure only through their return value.
+#[must_use]
 pub fn last(call: &'static str) -> Error {
     win32(call)(windows::core::Error::from_thread())
 }

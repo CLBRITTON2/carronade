@@ -4,13 +4,12 @@ mod common;
 
 use std::error::Error;
 use std::process::Stdio;
-use std::sync::PoisonError;
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_RETURN, VK_RIGHT, VK_UP,
 };
 
-use common::{CONFIG, Exit, ONE_AT_A_TIME, Outcome, Picker, carronade};
+use common::{CONFIG, Exit, Outcome, Picker, carronade, turn};
 
 /// What `carronade dmenu` prints to stderr, with the shipped config edited by `change`, when it fails before opening.
 fn config_error(
@@ -42,7 +41,7 @@ fn picked(exit: &Exit, line: &str) {
 
 #[test]
 fn enter_prints_the_match() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("alpha\nbeta\ngamma\n")?;
     picker.type_query("gam")?;
     picker.press(VK_RETURN)?;
@@ -52,7 +51,7 @@ fn enter_prints_the_match() -> Outcome {
 
 #[test]
 fn enter_with_no_query_prints_the_first_item() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("alpha\nbeta\n")?;
     picker.press(VK_RETURN)?;
     picked(&picker.exit()?, "alpha");
@@ -61,7 +60,7 @@ fn enter_with_no_query_prints_the_first_item() -> Outcome {
 
 #[test]
 fn down_moves_through_the_matches() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("alpha\nbeta\ngamma\ndelta\n")?;
     picker.type_query("ta")?;
     picker.press(VK_DOWN)?;
@@ -72,7 +71,7 @@ fn down_moves_through_the_matches() -> Outcome {
 
 #[test]
 fn up_from_the_top_wraps_to_the_last_item() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("alpha\nbeta\ngamma\n")?;
     picker.press(VK_UP)?;
     picker.press(VK_RETURN)?;
@@ -82,7 +81,7 @@ fn up_from_the_top_wraps_to_the_last_item() -> Outcome {
 
 #[test]
 fn left_and_right_at_the_query_ends_move_across_columns() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     // The shipped config shows one column of 8, so the next column starts the next page.
     let picker = dmenu("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n")?;
     for key in [VK_RIGHT, VK_RIGHT, VK_DOWN, VK_LEFT, VK_DOWN] {
@@ -95,7 +94,7 @@ fn left_and_right_at_the_query_ends_move_across_columns() -> Outcome {
 
 #[test]
 fn the_wheel_moves_a_row_per_notch_and_stops_at_the_ends() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("alpha\nbeta\ngamma\n")?;
     for delta in [120, 120, -60, -60, -120, -360, 120] {
         picker.scroll(delta)?;
@@ -107,7 +106,7 @@ fn the_wheel_moves_a_row_per_notch_and_stops_at_the_ends() -> Outcome {
 
 #[test]
 fn typing_resets_the_cursor_to_the_first_match() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("alpha\nbeta\ngamma\n")?;
     picker.press(VK_DOWN)?;
     picker.type_query("a")?;
@@ -118,7 +117,7 @@ fn typing_resets_the_cursor_to_the_first_match() -> Outcome {
 
 #[test]
 fn words_match_in_any_order() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("windows terminal\nterminal preview\n")?;
     picker.type_query("term win")?;
     picker.press(VK_RETURN)?;
@@ -128,7 +127,7 @@ fn words_match_in_any_order() -> Outcome {
 
 #[test]
 fn enter_without_a_match_prints_the_query() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("alpha\nbeta\n")?;
     picker.type_query("zeta")?;
     picker.press(VK_RETURN)?;
@@ -138,7 +137,7 @@ fn enter_without_a_match_prints_the_query() -> Outcome {
 
 #[test]
 fn unicode_survives_the_round_trip() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("plain\ncafé ☕\n")?;
     picker.type_query("CAFÉ")?;
     picker.press(VK_RETURN)?;
@@ -148,7 +147,7 @@ fn unicode_survives_the_round_trip() -> Outcome {
 
 #[test]
 fn escape_cancels_with_exit_code_1() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("alpha\n")?;
     picker.press(VK_ESCAPE)?;
     let exit = picker.exit()?;
@@ -161,7 +160,7 @@ fn escape_cancels_with_exit_code_1() -> Outcome {
 
 #[test]
 fn losing_focus_cancels() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let first = dmenu("alpha\n")?;
     let second = dmenu("beta\n")?;
     let exit = first.exit()?;
@@ -173,7 +172,7 @@ fn losing_focus_cancels() -> Outcome {
 
 #[test]
 fn enter_on_empty_input_cancels() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("")?;
     picker.press(VK_RETURN)?;
     assert_eq!(picker.exit()?.code, Some(1));
@@ -182,7 +181,7 @@ fn enter_on_empty_input_cancels() -> Outcome {
 
 #[test]
 fn the_caret_moves_through_the_query() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("")?;
     picker.type_query("gmma")?;
     for key in [VK_LEFT, VK_LEFT, VK_LEFT] {
@@ -200,7 +199,7 @@ fn the_caret_moves_through_the_query() -> Outcome {
 
 #[test]
 fn backspace_removes_the_character_before_the_caret() -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let picker = dmenu("zeta\n")?;
     picker.type_query("zetaa")?;
     picker.press(VK_BACK)?;

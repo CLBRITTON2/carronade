@@ -1,9 +1,9 @@
 //! Drives the built carronade.exe: types through window messages and collects what it prints.
 
 use std::error::Error;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -18,7 +18,12 @@ use windows::core::w;
 pub type Outcome = Result<(), Box<dyn Error>>;
 
 // Two pickers on screen take focus from each other, and losing focus cancels one.
-pub static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+/// Holds the desktop for one test's pickers until dropped. A test that panicked holding it leaves nothing to undo.
+pub fn turn() -> MutexGuard<'static, ()> {
+    ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 pub const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/config.toml");
@@ -30,8 +35,25 @@ pub fn carronade(config: &str) -> Command {
 }
 
 pub struct Picker {
-    child: Child,
+    child: Running,
     window: HWND,
+}
+
+/// A carronade process, killed on drop if still running, so a test that fails before `exit` takes its window with it
+/// instead of leaving it to steal the focus from every later picker.
+struct Running(Child);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let ended = match self.0.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => self.0.kill().and_then(|()| self.0.wait()).map(drop),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = ended {
+            eprintln!("could not end carronade (process {}): {error}", self.0.id());
+        }
+    }
 }
 
 pub struct Exit {
@@ -44,18 +66,21 @@ impl Picker {
     /// Starts `command` with `stdin` as its input and waits for its window.
     pub fn open(command: Command, stdin: &str) -> Result<Self, Box<dyn Error>> {
         let mut command = command;
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+        let mut child = Running(
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?,
+        );
         // Dropping stdin closes it, which ends dmenu's item list.
         child
+            .0
             .stdin
             .take()
             .ok_or("carronade has no stdin")?
             .write_all(stdin.as_bytes())?;
-        let window = picker_window(child.id())?;
+        let window = picker_window(child.0.id())?;
         Ok(Self { child, window })
     }
 
@@ -77,7 +102,10 @@ impl Picker {
         reason = "each test binary compiles its own copy, and only dmenu scrolls"
     )]
     pub fn scroll(&self, delta: i16) -> Outcome {
-        self.post(WM_MOUSEWHEEL, usize::from(delta as u16) << 16)
+        self.post(
+            WM_MOUSEWHEEL,
+            usize::from(u16::from_ne_bytes(delta.to_ne_bytes())) << 16,
+        )
     }
 
     fn post(&self, message: u32, wparam: usize) -> Outcome {
@@ -87,21 +115,31 @@ impl Picker {
     }
 
     pub fn exit(mut self) -> Result<Exit, Box<dyn Error>> {
+        let child = &mut self.child.0;
         let start = Instant::now();
-        while self.child.try_wait()?.is_none() {
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
             if start.elapsed() > TIMEOUT {
-                self.child.kill()?;
                 return Err("carronade did not exit".into());
             }
             sleep(Duration::from_millis(20));
-        }
-        let output = self.child.wait_with_output()?;
+        };
         Ok(Exit {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout)?,
-            stderr: String::from_utf8(output.stderr)?,
+            code: status.code(),
+            stdout: read_all(child.stdout.take().ok_or("carronade has no stdout")?)?,
+            stderr: read_all(child.stderr.take().ok_or("carronade has no stderr")?)?,
         })
     }
+}
+
+/// What an exited carronade left in `pipe`, which its exit closed, so reading cannot block.
+fn read_all(pipe: impl Read) -> Result<String, Box<dyn Error>> {
+    let mut pipe = pipe;
+    let mut text = String::new();
+    pipe.read_to_string(&mut text)?;
+    Ok(text)
 }
 
 /// The visible carronade window that `pid` owns, polled for until it shows.
@@ -113,7 +151,7 @@ fn picker_window(pid: u32) -> Result<HWND, Box<dyn Error>> {
         while let Ok(window) = unsafe { FindWindowExW(None, after, w!("carronade"), None) } {
             let mut owner = 0;
             // SAFETY: `owner` is a writable u32, and a window gone since the search only yields 0.
-            unsafe { GetWindowThreadProcessId(window, Some(&mut owner)) };
+            unsafe { GetWindowThreadProcessId(window, Some(&raw mut owner)) };
             // SAFETY: takes the window by value and only reads its style.
             if owner == pid && unsafe { IsWindowVisible(window) }.as_bool() {
                 return Ok(window);

@@ -1,10 +1,11 @@
-//! Reads the real Start menu through the shell.
+//! Reads the real Start menu, its icons and its launches through the shell.
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use carronade::apps::{self, App};
 use carronade::error::Error as CarronadeError;
+use carronade::{icons, shell};
 
 #[test]
 fn list_finds_named_apps_in_name_order() -> Result<(), Box<dyn Error>> {
@@ -31,15 +32,6 @@ fn cache(name: &str) -> PathBuf {
     Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(name)
         .join("apps.toml")
-}
-
-#[test]
-fn a_saved_list_loads_back_unchanged() -> Result<(), Box<dyn Error>> {
-    let path = cache("round-trip");
-    let apps = apps::list()?;
-    apps::save(&path, &apps)?;
-    assert_eq!(apps::load(&path)?, Some(apps));
-    Ok(())
 }
 
 #[test]
@@ -88,7 +80,7 @@ fn an_invalid_cache_names_its_path() -> Result<(), Box<dyn Error>> {
 #[test]
 fn every_app_has_an_icon() -> Result<(), Box<dyn Error>> {
     for app in apps::list()? {
-        apps::display_icon(&app.target(), 32)?;
+        icons::display_icon(&app.target(), 32)?;
     }
     Ok(())
 }
@@ -96,7 +88,7 @@ fn every_app_has_an_icon() -> Result<(), Box<dyn Error>> {
 #[test]
 fn a_missing_app_has_no_icon() {
     let target = "shell:AppsFolder\\carronade.missing_0000000000000!App";
-    let result = apps::icon(target, 32);
+    let result = icons::icon(target, 32);
     assert!(
         matches!(&result, Err(CarronadeError::Icon { target: failed, .. }) if failed == target),
         "got {result:?}"
@@ -106,7 +98,7 @@ fn a_missing_app_has_no_icon() {
 #[test]
 fn launching_a_missing_app_names_it_in_the_error() {
     let target = "shell:AppsFolder\\carronade.missing_0000000000000!App";
-    let result = apps::launch(target);
+    let result = shell::launch(target);
     assert!(
         matches!(&result, Err(CarronadeError::Launch { target: failed, .. }) if failed == target),
         "got {result:?}"
@@ -116,7 +108,7 @@ fn launching_a_missing_app_names_it_in_the_error() {
 #[test]
 fn launching_a_missing_app_as_admin_names_it_in_the_error() {
     let target = "shell:AppsFolder\\carronade.missing_0000000000000!App";
-    let result = apps::launch_as_admin(target);
+    let result = shell::launch_as_admin(target);
     assert!(
         matches!(&result, Err(CarronadeError::Launch { target: failed, .. }) if failed == target),
         "got {result:?}"

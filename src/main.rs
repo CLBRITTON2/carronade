@@ -15,6 +15,7 @@ use carronade::files;
 use carronade::history::{self, Use};
 use carronade::menu::Choice;
 use carronade::picker::{Action, Picture, Row, Step, browse, pick};
+use carronade::shell;
 use carronade::store::{self, UnixSeconds};
 use carronade::system::{self, Command};
 use windows::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
@@ -26,7 +27,7 @@ fn main() -> ExitCode {
         Ok(parsed) => parsed,
         Err(usage) => return fail(&usage),
     };
-    match run(path, mode) {
+    match run(path.as_deref(), mode) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
         Err(error) => fail(&error),
@@ -38,6 +39,7 @@ fn fail(error: &dyn std::error::Error) -> ExitCode {
     ExitCode::from(2)
 }
 
+#[derive(Clone, Copy, Debug)]
 enum Mode {
     Dmenu,
     Apps,
@@ -65,8 +67,8 @@ fn parse(args: Vec<String>) -> Result<(Option<PathBuf>, Mode), Usage> {
 }
 
 /// Runs `mode` with the config at `path`, or the default one, returning whether something was picked.
-fn run(path: Option<PathBuf>, mode: Mode) -> Result<bool, Error> {
-    let config = config::load(&path.map_or_else(config::path, Ok)?)?;
+fn run(path: Option<&Path>, mode: Mode) -> Result<bool, Error> {
+    let config = config::load(&path.map_or_else(config::path, |path| Ok(path.to_owned()))?)?;
     match mode {
         Mode::Dmenu => dmenu(config),
         Mode::Apps => search(config, Kind::Apps),
@@ -88,7 +90,7 @@ fn dmenu(config: Config) -> Result<bool, Error> {
 }
 
 /// The two lists apps and files switch between in one window.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Kind {
     Apps,
     Files,
@@ -104,7 +106,7 @@ impl Kind {
 }
 
 /// An app or entry with the boost its history gives it.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Item {
     App(App, i32),
     Command(Command),
@@ -145,6 +147,7 @@ impl Row for Item {
 }
 
 /// What a search needs from the config, which the picker takes.
+#[derive(Debug)]
 struct Settings {
     apps_cache: bool,
     files_cache: bool,
@@ -170,6 +173,7 @@ impl Settings {
 }
 
 /// Each list, found the first time the picker shows it.
+#[derive(Debug)]
 struct Found {
     apps: Option<Vec<App>>,
     files: Option<Vec<files::Entry>>,
@@ -221,6 +225,7 @@ fn boost(boosts: &HashMap<String, i32>, key: &str) -> i32 {
 }
 
 /// What a search ends with.
+#[derive(Debug)]
 enum Picked {
     Open(Choice<Item>),
     /// Ctrl+Enter on a file or folder.
@@ -276,20 +281,14 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
     })?;
     let picked = match choice {
         Picked::Open(Choice::Item(Item::App(app, _))) => {
-            apps::launch(&app.target())?;
-            history::save(
-                &apps_history,
-                history::used(&settings.recent_apps, &app.id, settings.now),
-            )?;
+            shell::launch(&app.target())?;
+            record_app(&apps_history, &settings, &app)?;
             true
         }
         Picked::Admin(app) => {
-            let launched = apps::launch_as_admin(&app.target())?;
+            let launched = shell::launch_as_admin(&app.target())?;
             if launched {
-                history::save(
-                    &apps_history,
-                    history::used(&settings.recent_apps, &app.id, settings.now),
-                )?;
+                record_app(&apps_history, &settings, &app)?;
             }
             launched
         }
@@ -298,7 +297,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
             true
         }
         Picked::Open(Choice::Item(Item::Entry(entry, _))) => {
-            apps::launch(&entry.path)?;
+            shell::launch(&entry.path)?;
             history::save(
                 &files_history,
                 history::used(&settings.recent_files, &entry.path, settings.now),
@@ -306,12 +305,12 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
             true
         }
         Picked::Open(Choice::Text(text)) => {
-            apps::launch(&text)?;
+            shell::launch(&text)?;
             true
         }
         Picked::Open(Choice::Cancel) => false,
         Picked::Terminal(entry) => {
-            apps::launch_in(&settings.terminal, &files::folder(Path::new(&entry.path))?)?;
+            shell::launch_in(&settings.terminal, &files::folder(Path::new(&entry.path))?)?;
             true
         }
     };
@@ -323,6 +322,14 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         files::save(&files::cache_path()?, &files::list(&settings.roots)?)?;
     }
     Ok(picked)
+}
+
+/// Saves the apps history at `path` with one more launch of `app`.
+fn record_app(path: &Path, settings: &Settings, app: &App) -> Result<(), Error> {
+    history::save(
+        path,
+        history::used(&settings.recent_apps, &app.id, settings.now),
+    )
 }
 
 /// Writes to stderr when the caller gave one, else shows a message box: started from a hotkey, nothing reads stderr.

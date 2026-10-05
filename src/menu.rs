@@ -12,6 +12,7 @@ pub enum Choice<T> {
 }
 
 /// What `filter` matches and ranks an item by.
+#[derive(Debug)]
 pub struct Candidate {
     pub label: String,
     /// Matched like the label but never drawn, such as an app's exe name.
@@ -169,7 +170,7 @@ fn run(letters: &[Letter], word: &[char], start: usize) -> Option<Fit> {
     if !slice
         .iter()
         .zip(word)
-        .all(|(letter, wanted)| letter.letter == *wanted)
+        .all(|(letter, wanted)| letter.lowercase == *wanted)
     {
         return None;
     }
@@ -203,7 +204,7 @@ const GAP_EXTENSION: i32 = 1;
 /// One letter of an item, lowercase, with the bonuses a match on it earns.
 #[derive(Clone, Copy)]
 struct Letter {
-    letter: char,
+    lowercase: char,
     boundary: i32,
     name: i32,
 }
@@ -218,7 +219,7 @@ fn letters(item: &str) -> Vec<Letter> {
             });
             previous = Some(letter);
             Letter {
-                letter: lower(letter),
+                lowercase: lower(letter),
                 boundary: if boundary { BOUNDARY } else { 0 },
                 name: if at >= name { NAME } else { 0 },
             }
@@ -257,7 +258,7 @@ fn fuzzy(letters: &[Letter], word: &[char]) -> Option<Fit> {
         letters
             .iter()
             .map(|letter| {
-                (letter.letter == *first).then_some(Cell {
+                (letter.lowercase == *first).then_some(Cell {
                     score: MATCH + letter.boundary + letter.name,
                     run: letter.boundary,
                     from: None,
@@ -287,7 +288,7 @@ fn fuzzy(letters: &[Letter], word: &[char]) -> Option<Fit> {
                     run: letter.boundary,
                     from: Some(from),
                 });
-                let cell = extended.max(jumped).filter(|_| letter.letter == *wanted);
+                let cell = extended.max(jumped).filter(|_| letter.lowercase == *wanted);
                 gapped = gapped
                     .map(|(score, from)| (score - GAP_EXTENSION, from))
                     .max(before.map(|(cell, from)| (cell.score - GAP_START, from)));

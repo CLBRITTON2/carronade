@@ -64,17 +64,24 @@ impl Layout {
     }
 }
 
-/// Lays out `config` for a font `em` px tall on a monitor at `scale` (1.0 at 96 DPI). `line` is the height of a line
-/// of text, `prompt` the width of the prompt and `switch` that of the wider switch icon, all as DirectWrite measured
-/// them.
-pub fn measure(
-    config: &Config,
-    em: f32,
-    scale: f32,
-    line: f32,
-    prompt: f32,
-    switch: f32,
-) -> Layout {
+/// What DirectWrite measured of the input bar's text, in px.
+#[derive(Clone, Copy, Debug)]
+pub struct Measured {
+    /// The height of a line of text.
+    pub line: f32,
+    /// The width of the prompt.
+    pub prompt: f32,
+    /// The width of the wider switch icon.
+    pub switch: f32,
+}
+
+/// Lays out `config` for a font `em` px tall on a monitor at `scale` (1.0 at 96 DPI), around the `measured` text.
+pub fn measure(config: &Config, em: f32, scale: f32, measured: &Measured) -> Layout {
+    let Measured {
+        line,
+        prompt,
+        switch,
+    } = *measured;
     let px = |length: Length| length.px(em, scale);
     let (input, list, element) = (&config.input, &config.list, &config.element);
     let border = px(config.window.border);
@@ -208,7 +215,12 @@ mod tests {
 
     fn layout(scale: f32) -> Result<Layout, toml::de::Error> {
         let config: Config = toml::from_str(CONFIG)?;
-        Ok(measure(&config, 10.0, scale, 16.0, 8.0, 16.0))
+        let measured = Measured {
+            line: 16.0,
+            prompt: 8.0,
+            switch: 16.0,
+        };
+        Ok(measure(&config, 10.0, scale, &measured))
     }
 
     fn rect(left: f32, top: f32, right: f32, bottom: f32) -> Rect {

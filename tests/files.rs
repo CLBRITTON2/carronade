@@ -6,15 +6,14 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::sync::PoisonError;
 
 use carronade::error::Error as CarronadeError;
-use carronade::{apps, files};
+use carronade::{files, shell};
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, SetFileAttributesW};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_TAB};
 use windows::core::HSTRING;
 
-use common::{CONFIG, ONE_AT_A_TIME, Outcome, Picker, carronade};
+use common::{CONFIG, Outcome, Picker, carronade, turn};
 
 /// An empty folder for one test, holding the empty `files` named, with their folders.
 fn fixture(name: &str, files: &[&str]) -> Result<PathBuf, Box<dyn Error>> {
@@ -129,7 +128,7 @@ fn a_failed_terminal_names_its_program_and_folder() -> Outcome {
     let root = fixture("files-terminal", &["terminal.exe"])?;
     let program = root.join("terminal.exe");
     let program = program.to_str().ok_or("path is not Unicode")?;
-    let result = apps::launch_in(program, &root);
+    let result = shell::launch_in(program, &root);
     assert!(
         matches!(&result, Err(CarronadeError::LaunchIn { program: failed, folder, .. })
             if failed == program && *folder == root),
@@ -157,7 +156,7 @@ fn tab_in_apps_searches_the_files_for_the_query_typed() -> Outcome {
 
 /// Opens `mode` over a folder holding a deep `run.exe`, with no caches, and picks it with `keys`.
 fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome) -> Outcome {
-    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = turn();
     let root = fixture(name, &["kit/tests/integration/run.exe", "kit/run.txt"])?;
     let config = root.with_extension("toml");
     // A checkout with core.autocrlf, as on the CI runner, has CRLF line ends.
@@ -183,8 +182,8 @@ fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome
     let exit = picker.exit()?;
     // An empty exe fails to start with no window, whatever the machine's file associations, so the error names the
     // pick. Anything that opens a window takes the foreground from the next test's picker.
-    let picked = root.join("kit\\tests\\integration\\run.exe");
-    let picked = picked.to_str().ok_or("path is not Unicode")?;
+    let run_exe = root.join("kit\\tests\\integration\\run.exe");
+    let run_exe = run_exe.to_str().ok_or("path is not Unicode")?;
     assert_eq!(
         (exit.code, exit.stdout.as_str()),
         (Some(2), ""),
@@ -193,7 +192,7 @@ fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome
     );
     assert!(
         exit.stderr
-            .starts_with(&format!("carronade: launching {picked:?} failed: ")),
+            .starts_with(&format!("carronade: launching {run_exe:?} failed: ")),
         "{}",
         exit.stderr
     );

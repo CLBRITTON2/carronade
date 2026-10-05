@@ -103,7 +103,7 @@ fn enable_shutdown() -> Result<(), Error> {
     let process = unsafe { GetCurrentProcess() };
     let mut token = HANDLE::default();
     // SAFETY: `process` is this process's pseudo handle and `token` a writable HANDLE.
-    unsafe { OpenProcessToken(process, TOKEN_ADJUST_PRIVILEGES, &mut token) }
+    unsafe { OpenProcessToken(process, TOKEN_ADJUST_PRIVILEGES, &raw mut token) }
         .map_err(win32("OpenProcessToken"))?;
     // SAFETY: `OpenProcessToken` succeeded, so `token` is an open handle nothing else closes.
     let token = unsafe { Owned::new(token) };
@@ -113,7 +113,7 @@ fn enable_shutdown() -> Result<(), Error> {
 fn enable(token: HANDLE, privilege: windows::core::PCWSTR) -> Result<(), Error> {
     let mut luid = LUID::default();
     // SAFETY: `privilege` is a static NUL-terminated name and `luid` a writable LUID.
-    unsafe { LookupPrivilegeValueW(None, privilege, &mut luid) }
+    unsafe { LookupPrivilegeValueW(None, privilege, &raw mut luid) }
         .map_err(win32("LookupPrivilegeValueW"))?;
     let privileges = TOKEN_PRIVILEGES {
         PrivilegeCount: 1,
@@ -123,7 +123,7 @@ fn enable(token: HANDLE, privilege: windows::core::PCWSTR) -> Result<(), Error> 
         }],
     };
     // SAFETY: `token` is open with TOKEN_ADJUST_PRIVILEGES, and with no previous-state buffer its length is 0.
-    unsafe { AdjustTokenPrivileges(token, false, Some(&privileges), 0, None, None) }
+    unsafe { AdjustTokenPrivileges(token, false, Some(&raw const privileges), 0, None, None) }
         .map_err(win32("AdjustTokenPrivileges"))?;
     // It succeeds without enabling a privilege the account lacks, and says so only in the last error.
     // SAFETY: reads this thread's last error, set by the call just above.
