@@ -53,56 +53,132 @@ pub(super) extern "system" fn window_proc(
 
 /// Handles the keys that steer the picker or edit the query, returning false for the rest.
 fn key(key: VIRTUAL_KEY) -> Result<bool, Error> {
-    let ctrl = held(VK_CONTROL);
-    let shift = held(VK_SHIFT);
-    match key {
-        VK_ESCAPE => finish(Ok(Action::Pick(Choice::Cancel)))?,
-        VK_RETURN if ctrl => {
-            if let Some(row) = with(|state| state.shown.get(state.cursor).copied())? {
-                finish(Ok(if shift {
-                    Action::Admin(row)
-                } else {
-                    Action::Terminal(row)
-                }))?;
-            }
-        }
-        VK_RETURN => {
-            let choice = with(|state| {
-                let query = state.line.text();
-                if shift {
-                    menu::typed(&query)
-                } else {
-                    menu::accept(&state.shown, state.cursor, &query)
-                }
-            })?;
-            finish(Ok(Action::Pick(choice)))?;
-        }
-        VK_TAB if with(|state| state.switch.is_some())? => finish(Ok(Action::Switch))?,
-        VK_DOWN => move_by(1)?,
-        VK_UP => move_by(-1)?,
-        VK_N if ctrl => move_by(1)?,
-        VK_P if ctrl => move_by(-1)?,
-        VK_BACK if ctrl => edit(Line::delete_word)?,
-        VK_BACK => edit(Line::backspace)?,
-        VK_DELETE => edit(Line::delete)?,
-        VK_LEFT if with(|state| state.line.before.is_empty())? => {
-            move_to(|state| menu::column_left(state.cursor, state.canvas.config.list.lines))?;
-        }
-        VK_RIGHT if with(|state| state.line.after.is_empty())? => move_to(|state| {
-            let lines = state.canvas.config.list.lines;
-            menu::column_right(state.cursor, state.shown.len(), lines)
-        })?,
-        VK_LEFT => edit(Line::left)?,
-        VK_RIGHT => edit(Line::right)?,
-        VK_HOME => edit(Line::home)?,
-        VK_END => edit(Line::end)?,
-        VK_V if ctrl => {
-            let pasted = clipboard()?;
-            edit(|line| line.insert(&pasted))?;
-        }
-        _ => return Ok(false),
+    let (ctrl, shift) = (held(VK_CONTROL), held(VK_SHIFT));
+    let context = with(|state| KeyContext {
+        ctrl,
+        shift,
+        caret_at_start: state.line.before.is_empty(),
+        caret_at_end: state.line.after.is_empty(),
+        switch: state.switch.is_some(),
+    })?;
+    match key_action(key, &context) {
+        Some(action) => act(action).map(|()| true),
+        None => Ok(false),
     }
-    Ok(true)
+}
+
+/// What a key asks of the picker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyAction {
+    Cancel,
+    /// Pick the selected match, or the query when nothing matches.
+    Accept,
+    /// Pick the query as typed, even when something matches.
+    AcceptTyped,
+    Terminal,
+    Admin,
+    Switch,
+    Down,
+    Up,
+    ColumnLeft,
+    ColumnRight,
+    DeleteWord,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Home,
+    End,
+    Paste,
+}
+
+/// What a key's meaning depends on besides the key.
+struct KeyContext {
+    ctrl: bool,
+    shift: bool,
+    caret_at_start: bool,
+    caret_at_end: bool,
+    /// The bar shows a switch icon.
+    switch: bool,
+}
+
+fn key_action(key: VIRTUAL_KEY, context: &KeyContext) -> Option<KeyAction> {
+    let &KeyContext {
+        ctrl,
+        shift,
+        caret_at_start,
+        caret_at_end,
+        switch,
+    } = context;
+    Some(match key {
+        VK_ESCAPE => KeyAction::Cancel,
+        VK_RETURN if ctrl && shift => KeyAction::Admin,
+        VK_RETURN if ctrl => KeyAction::Terminal,
+        VK_RETURN if shift => KeyAction::AcceptTyped,
+        VK_RETURN => KeyAction::Accept,
+        VK_TAB if switch => KeyAction::Switch,
+        VK_DOWN => KeyAction::Down,
+        VK_UP => KeyAction::Up,
+        VK_N if ctrl => KeyAction::Down,
+        VK_P if ctrl => KeyAction::Up,
+        VK_BACK if ctrl => KeyAction::DeleteWord,
+        VK_BACK => KeyAction::Backspace,
+        VK_DELETE => KeyAction::Delete,
+        VK_LEFT if caret_at_start => KeyAction::ColumnLeft,
+        VK_RIGHT if caret_at_end => KeyAction::ColumnRight,
+        VK_LEFT => KeyAction::Left,
+        VK_RIGHT => KeyAction::Right,
+        VK_HOME => KeyAction::Home,
+        VK_END => KeyAction::End,
+        VK_V if ctrl => KeyAction::Paste,
+        _ => return None,
+    })
+}
+
+fn act(action: KeyAction) -> Result<(), Error> {
+    match action {
+        KeyAction::Cancel => finish(Ok(Action::Pick(Choice::Cancel))),
+        KeyAction::Accept => {
+            let choice =
+                with(|state| menu::accept(&state.shown, state.cursor, &state.line.text()))?;
+            finish(Ok(Action::Pick(choice)))
+        }
+        KeyAction::AcceptTyped => {
+            let choice = with(|state| menu::typed(&state.line.text()))?;
+            finish(Ok(Action::Pick(choice)))
+        }
+        KeyAction::Terminal => on_selected(Action::Terminal),
+        KeyAction::Admin => on_selected(Action::Admin),
+        KeyAction::Switch => finish(Ok(Action::Switch)),
+        KeyAction::Down => move_by(1),
+        KeyAction::Up => move_by(-1),
+        KeyAction::ColumnLeft => {
+            move_to(|state| menu::column_left(state.cursor, state.canvas.config.list.lines.get()))
+        }
+        KeyAction::ColumnRight => move_to(|state| {
+            let lines = state.canvas.config.list.lines.get();
+            menu::column_right(state.cursor, state.shown.len(), lines)
+        }),
+        KeyAction::DeleteWord => edit(Line::delete_word),
+        KeyAction::Backspace => edit(Line::backspace),
+        KeyAction::Delete => edit(Line::delete),
+        KeyAction::Left => edit(Line::left),
+        KeyAction::Right => edit(Line::right),
+        KeyAction::Home => edit(Line::home),
+        KeyAction::End => edit(Line::end),
+        KeyAction::Paste => {
+            let pasted = clipboard()?;
+            edit(|line| line.insert(&pasted))
+        }
+    }
+}
+
+/// Finishes with `action` on the selected match, or does nothing when there is none.
+fn on_selected(action: fn(usize) -> Action<usize>) -> Result<(), Error> {
+    match with(|state| state.shown.get(state.cursor).copied())? {
+        Some(row) => finish(Ok(action(row))),
+        None => Ok(()),
+    }
 }
 
 /// Inserts a typed UTF-16 unit. Control characters, which Backspace and Enter also type, insert nothing, and neither
@@ -200,4 +276,86 @@ fn held(key: VIRTUAL_KEY) -> bool {
     // SAFETY: reads this thread's keyboard state for a virtual key code.
     let state = unsafe { GetKeyState(i32::from(key.0)) };
     state < 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The action of `key` with the caret mid-query and a switch shown.
+    fn action(key: VIRTUAL_KEY, ctrl: bool, shift: bool) -> Option<KeyAction> {
+        let context = KeyContext {
+            ctrl,
+            shift,
+            caret_at_start: false,
+            caret_at_end: false,
+            switch: true,
+        };
+        key_action(key, &context)
+    }
+
+    #[test]
+    fn modifiers_pick_what_enter_does() {
+        let enter = |ctrl, shift| action(VK_RETURN, ctrl, shift);
+        assert_eq!(enter(false, false), Some(KeyAction::Accept));
+        assert_eq!(enter(false, true), Some(KeyAction::AcceptTyped));
+        assert_eq!(enter(true, false), Some(KeyAction::Terminal));
+        assert_eq!(enter(true, true), Some(KeyAction::Admin));
+    }
+
+    #[test]
+    fn ctrl_letters_move_and_paste_only_with_ctrl() {
+        assert_eq!(action(VK_N, true, false), Some(KeyAction::Down));
+        assert_eq!(action(VK_P, true, false), Some(KeyAction::Up));
+        assert_eq!(action(VK_V, true, false), Some(KeyAction::Paste));
+        assert_eq!(action(VK_N, false, false), None);
+        assert_eq!(action(VK_P, false, false), None);
+        assert_eq!(action(VK_V, false, false), None);
+    }
+
+    #[test]
+    fn ctrl_backspace_deletes_a_word() {
+        assert_eq!(action(VK_BACK, true, false), Some(KeyAction::DeleteWord));
+        assert_eq!(action(VK_BACK, false, false), Some(KeyAction::Backspace));
+    }
+
+    #[test]
+    fn arrows_past_the_query_ends_change_column() {
+        let context = |caret_at_start, caret_at_end| KeyContext {
+            ctrl: false,
+            shift: false,
+            caret_at_start,
+            caret_at_end,
+            switch: false,
+        };
+        assert_eq!(
+            key_action(VK_LEFT, &context(true, false)),
+            Some(KeyAction::ColumnLeft)
+        );
+        assert_eq!(
+            key_action(VK_LEFT, &context(false, true)),
+            Some(KeyAction::Left)
+        );
+        assert_eq!(
+            key_action(VK_RIGHT, &context(false, true)),
+            Some(KeyAction::ColumnRight)
+        );
+        assert_eq!(
+            key_action(VK_RIGHT, &context(true, false)),
+            Some(KeyAction::Right)
+        );
+    }
+
+    #[test]
+    fn tab_switches_only_with_a_switch() {
+        assert_eq!(action(VK_TAB, false, false), Some(KeyAction::Switch));
+        let context = KeyContext {
+            ctrl: false,
+            shift: false,
+            caret_at_start: false,
+            caret_at_end: false,
+            switch: false,
+        };
+        assert_eq!(key_action(VK_TAB, &context), None);
+    }
 }

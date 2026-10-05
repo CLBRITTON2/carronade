@@ -323,7 +323,7 @@ fn prepare(config: Config) -> Result<Prepared, Error> {
     };
     let layout = layout::measure(&config, em, scale, &measured);
 
-    // Whole pixels from `ceil`, a screen's size at most.
+    // Whole pixels from `ceil`. A size past i32 saturates, and `surface` then fails with `Error::Surface`.
     let (width, height) = (layout.width as i32, layout.height as i32);
     let work = monitor.work;
     let origin = POINT {
@@ -558,7 +558,8 @@ fn surface(d2d: &ID2D1Factory, width: i32, height: i32) -> Result<Surface, Error
             0,
         )
     }
-    .map_err(win32("CreateDIBSection"))?;
+    // GDI sets no last error here, so the windows-rs error only says the operation completed successfully.
+    .map_err(|_| Error::Surface { width, height })?;
     // SAFETY: `section` is a fresh bitmap nothing else owns, so `Owned` deletes it once.
     let dib = unsafe { Owned::new(section) };
     // SAFETY: a null DC asks for one compatible with the screen.
@@ -686,8 +687,7 @@ fn render() -> Result<(), Error> {
 
 impl State {
     fn page(&self) -> NonZeroUsize {
-        let list = &self.canvas.config.list;
-        list.columns.saturating_mul(list.lines)
+        self.canvas.config.list.page()
     }
 
     /// The matches on the page that holds the cursor, as indices into `items`.

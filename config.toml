@@ -2,12 +2,13 @@
 # Lengths are "<n>px", scaled with the monitor's DPI, or "<n>em", a multiple of the font size.
 # Colors are "#rrggbb" or "#rrggbbaa".
 
+# size is in points, from 4 to 72.
 [font]
 family = "Segoe UI"
 size = 11
 
 # The popup. image, the only optional field, is cover-scaled behind everything else. A path in image or files.roots
-# can start with ~ for your profile folder.
+# is absolute or starts with ~ for your profile folder.
 [window]
 width = "40em"
 background = "#202020"
@@ -32,7 +33,7 @@ placeholder_color = "#ffffff80"
 apps_icon = "Apps"
 files_icon = "Files"
 
-# The grid of matches below the text box, filled column by column.
+# The grid of matches below the text box, filled column by column. columns and lines run from 1 to 64.
 [list]
 background = "#00000000"
 padding = "1em"
@@ -40,7 +41,8 @@ spacing = "0.25em"
 columns = 1
 lines = 8
 
-# One match: its icon, then its label, with the letters the query matched in highlight.
+# One match: its icon, then its label, with the letters the query matched in highlight. icon is the icon's side, from
+# 1px to 256px or 0.25em to 4em.
 [element]
 padding = "0.5em"
 radius = "0.5em"

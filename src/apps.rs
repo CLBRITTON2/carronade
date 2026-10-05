@@ -12,7 +12,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{Interface, PWSTR};
 
-use crate::error::{Error, utf16, win32};
+use crate::error::{self, Error, utf16, win32};
 use crate::picker::{Picture, Row};
 use crate::platform::com;
 use crate::store;
@@ -69,11 +69,20 @@ pub fn list() -> Result<Vec<App>, Error> {
         // SAFETY: `next` holds one slot, and the fetched count may be omitted when asking for one item.
         unsafe { items.Next(&mut next, None) }.map_err(win32("IEnumShellItems::Next"))?;
         let [Some(item)] = next else { break };
-        apps.push(App {
-            name: display_name(&item, SIGDN_NORMALDISPLAY)?,
-            id: display_name(&item, SIGDN_PARENTRELATIVEPARSING)?,
-            exe: link_target(&item)?.as_deref().and_then(exe_name),
-        });
+        let name = display_name(
+            &item,
+            SIGDN_NORMALDISPLAY,
+            win32("IShellItem::GetDisplayName(NORMALDISPLAY)"),
+            "an app's display name",
+        )?;
+        let id = display_name(
+            &item,
+            SIGDN_PARENTRELATIVEPARSING,
+            error::app(&name, "IShellItem::GetDisplayName(PARENTRELATIVEPARSING)"),
+            "an app's parsing name",
+        )?;
+        let exe = link_target(&item, &name)?.as_deref().and_then(exe_name);
+        apps.push(App { name, id, exe });
     }
     apps.sort_by_key(|app| app.name.to_lowercase());
     Ok(apps)
@@ -108,24 +117,33 @@ pub fn save(path: &Path, apps: &[App]) -> Result<(), Error> {
     store::save(path, VERSION, &CacheRef { app: apps })
 }
 
-fn display_name(item: &IShellItem, form: SIGDN) -> Result<String, Error> {
+/// `item`'s name in `form`, which is `what`, with a failed call mapped by `failed`.
+fn display_name(
+    item: &IShellItem,
+    form: SIGDN,
+    failed: impl FnOnce(windows::core::Error) -> Error,
+    what: &'static str,
+) -> Result<String, Error> {
     // SAFETY: `item` is a live shell item, and `taken` frees the returned string.
-    let name = unsafe { item.GetDisplayName(form) }.map_err(win32("IShellItem::GetDisplayName"))?;
-    taken(name, "an app's display name")
+    let name = unsafe { item.GetDisplayName(form) }.map_err(failed)?;
+    // SAFETY: GetDisplayName returned `name` NUL-terminated from the COM allocator, and only this call frees it.
+    unsafe { taken(name, what) }
 }
 
-/// What the shortcut behind `item` opens, or `None` for an app with no shortcut, as packaged apps are.
-fn link_target(item: &IShellItem) -> Result<Option<String>, Error> {
+/// What the shortcut behind `item`, the app `name`, opens, or `None` for an app with no shortcut, as packaged apps are.
+fn link_target(item: &IShellItem, name: &str) -> Result<Option<String>, Error> {
     let item: IShellItem2 = item
         .cast()
-        .map_err(win32("IShellItem::cast::<IShellItem2>"))?;
+        .map_err(error::app(name, "IShellItem::cast::<IShellItem2>"))?;
     // SAFETY: `item` is a live shell item, the key is a static PROPERTYKEY, and `taken` frees the returned string.
     match unsafe { item.GetString(&PKEY_Link_TargetParsingPath) } {
-        Ok(target) => taken(target, "a shortcut's target").map(Some),
+        // SAFETY: GetString returned `target` NUL-terminated from the COM allocator, and only this call frees it.
+        Ok(target) => unsafe { taken(target, "a shortcut's target") }.map(Some),
         Err(error) if error.code() == ERROR_NOT_FOUND.to_hresult() => Ok(None),
-        Err(error) => Err(win32("IShellItem2::GetString(Link.TargetParsingPath)")(
-            error,
-        )),
+        Err(error) => Err(error::app(
+            name,
+            "IShellItem2::GetString(Link.TargetParsingPath)",
+        )(error)),
     }
 }
 
@@ -138,10 +156,14 @@ fn exe_name(target: &str) -> Option<String> {
 }
 
 /// `text`, which is `what`, as a `String`, freeing the shell's copy.
-fn taken(text: PWSTR, what: &'static str) -> Result<String, Error> {
-    // SAFETY: the shell returned `text` NUL-terminated and it is still allocated.
+///
+/// # Safety
+///
+/// `text` must be a live NUL-terminated string from the COM allocator that nothing else frees or reads afterward.
+unsafe fn taken(text: PWSTR, what: &'static str) -> Result<String, Error> {
+    // SAFETY: the caller guarantees `text` is NUL-terminated and still allocated.
     let owned = unsafe { text.to_string() };
-    // SAFETY: the shell allocated `text` with the COM allocator and nothing reads it after this.
+    // SAFETY: the caller guarantees the COM allocator owns `text` and nothing reads it after this.
     unsafe { CoTaskMemFree(Some(text.0 as _)) };
     owned.map_err(utf16(what))
 }

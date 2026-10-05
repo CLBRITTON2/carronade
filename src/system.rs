@@ -73,6 +73,7 @@ pub fn run(command: Command) -> Result<(), Error> {
         Command::Lock => unsafe { LockWorkStation() }.map_err(win32("LockWorkStation")),
         Command::SignOut => exit_windows(EWX_LOGOFF),
         Command::Hibernate => {
+            enable_shutdown()?;
             // SAFETY: takes plain flags and no pointers.
             if unsafe { SetSuspendState(true, false, false) } {
                 Ok(())
@@ -97,7 +98,7 @@ fn exit_windows(flags: EXIT_WINDOWS_FLAGS) -> Result<(), Error> {
         .map_err(win32("ExitWindowsEx"))
 }
 
-/// Turns on the shutdown privilege, which every account holds but has off, as restart and shut down need.
+/// Turns on the shutdown privilege, which every account holds but has off, as hibernate, restart and shut down need.
 fn enable_shutdown() -> Result<(), Error> {
     // SAFETY: returns a pseudo handle that needs no closing.
     let process = unsafe { GetCurrentProcess() };

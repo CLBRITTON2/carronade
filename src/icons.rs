@@ -5,14 +5,14 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::SIZE;
-use windows::Win32::Graphics::Gdi::{BITMAP, DeleteObject, GetObjectW, HBITMAP, HPALETTE};
+use windows::Win32::Graphics::Gdi::{BITMAP, GetObjectW, HBITMAP, HPALETTE};
 use windows::Win32::Graphics::Imaging::{
     IWICImagingFactory, WICBitmapInterpolationModeHighQualityCubic, WICBitmapUsePremultipliedAlpha,
 };
 use windows::Win32::UI::Shell::{
     IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_ICONONLY,
 };
-use windows::core::HSTRING;
+use windows::core::{HSTRING, Owned};
 
 use crate::error::{self, Error};
 use crate::platform::com;
@@ -115,28 +115,20 @@ pub fn merged(fetched: Vec<Cached>, previous: Vec<Cached>) -> Vec<Cached> {
 
 /// The shell's icon for `target`, scaled to `side` px. Every error names `target`.
 pub fn fetch(wic: &IWICImagingFactory, target: &str, side: u32) -> Result<Pixels, Error> {
-    // An icon side is tens of px.
+    // `config::Side` keeps a side to a few thousand px.
     let icon = display_icon(target, side as i32)?;
-    let pixels = scaled(wic, target, icon, side);
-    // SAFETY: `icon` came from `display_icon`, this function owns it, and `scaled` copied its pixels already.
-    let deleted = unsafe { DeleteObject(icon.into()) }
-        .ok()
-        .map_err(error::icon(target, "DeleteObject"));
-    // The scaling error is the cause, so it wins over a failed delete.
-    let pixels = pixels?;
-    deleted?;
-    Ok(pixels)
+    scaled(wic, target, &icon, side)
 }
 
 fn scaled(
     wic: &IWICImagingFactory,
     target: &str,
-    icon: HBITMAP,
+    icon: &Owned<HBITMAP>,
     side: u32,
 ) -> Result<Pixels, Error> {
-    // SAFETY: `icon` is a live bitmap the caller owns until this returns, and a 32-bit one needs no palette.
+    // SAFETY: `icon` is a live bitmap borrowed for the call, and a 32-bit one needs no palette.
     let bitmap = unsafe {
-        wic.CreateBitmapFromHBITMAP(icon, HPALETTE::default(), WICBitmapUsePremultipliedAlpha)
+        wic.CreateBitmapFromHBITMAP(**icon, HPALETTE::default(), WICBitmapUsePremultipliedAlpha)
     }
     .map_err(error::icon(target, "CreateBitmapFromHBITMAP"))?;
     // SAFETY: `wic` is a live factory on this thread.
@@ -161,15 +153,17 @@ fn scaled(
 }
 
 /// The icon the shell shows for `target`, at most `size` px square, as a 32-bit bitmap with premultiplied alpha.
-pub fn icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
+pub fn icon(target: &str, size: i32) -> Result<Owned<HBITMAP>, Error> {
     com()?;
     // SAFETY: COM is initialized on this thread and the name is a temporary HSTRING that outlives the call.
     let factory: IShellItemImageFactory =
         unsafe { SHCreateItemFromParsingName(&HSTRING::from(target), None) }
             .map_err(error::icon(target, "SHCreateItemFromParsingName"))?;
-    // SAFETY: `factory` is a live COM object, and the caller owns the returned bitmap.
-    unsafe { factory.GetImage(SIZE { cx: size, cy: size }, SIIGBF_ICONONLY) }
-        .map_err(error::icon(target, "IShellItemImageFactory::GetImage"))
+    // SAFETY: `factory` is a live COM object.
+    let bitmap = unsafe { factory.GetImage(SIZE { cx: size, cy: size }, SIIGBF_ICONONLY) }
+        .map_err(error::icon(target, "IShellItemImageFactory::GetImage"))?;
+    // SAFETY: GetImage hands the caller a fresh bitmap nothing else deletes.
+    Ok(unsafe { Owned::new(bitmap) })
 }
 
 /// The shell's largest icon size. It scales smaller requests up from coarse assets, so fetch this and scale down.
@@ -179,31 +173,21 @@ const HALF_LARGEST: usize = LARGEST.unsigned_abs() as usize / 2;
 
 /// The icon to show for `target` at `size` px. An app with no large image comes back from a `LARGEST` request as its
 /// small one, unscaled, in the middle of a translucent frame, so that one is fetched again at `size`.
-pub fn display_icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
+pub fn display_icon(target: &str, size: i32) -> Result<Owned<HBITMAP>, Error> {
     let large = icon(target, LARGEST)?;
-    let opaque = opaque_side(target, large);
-    if let Ok(opaque) = opaque
-        && opaque >= HALF_LARGEST
-    {
+    if opaque_side(target, &large)? >= HALF_LARGEST {
         return Ok(large);
     }
-    // SAFETY: `large` came from `icon`, this function owns it, and it is not used after.
-    let deleted = unsafe { DeleteObject(large.into()) }
-        .ok()
-        .map_err(error::icon(target, "DeleteObject"));
-    // The bitmap error is the cause, so it wins over a failed delete.
-    opaque?;
-    deleted?;
     icon(target, size)
 }
 
 /// `opaque_extent` of the shell's icon `bitmap` for `target`.
-fn opaque_side(target: &str, bitmap: HBITMAP) -> Result<usize, Error> {
+fn opaque_side(target: &str, bitmap: &Owned<HBITMAP>) -> Result<usize, Error> {
     let mut info = BITMAP::default();
     // SAFETY: `info` is a writable BITMAP of exactly the size passed.
     let written = unsafe {
         GetObjectW(
-            bitmap.into(),
+            (**bitmap).into(),
             // A BITMAP is 32 bytes.
             size_of::<BITMAP>() as i32,
             Some((&raw mut info).cast()),
@@ -390,19 +374,16 @@ mod tests {
     }
 
     #[test]
-    fn a_bitmap_without_32_bit_pixels_names_its_target() -> Result<(), Error> {
-        // SAFETY: a 1 px monochrome bitmap with no initial bits, deleted below.
+    fn a_bitmap_without_32_bit_pixels_names_its_target() {
+        // SAFETY: a 1 px monochrome bitmap with no initial bits.
         let bitmap = unsafe { CreateBitmap(1, 1, 1, 1, None) };
-        let result = opaque_side("mono", bitmap);
         // SAFETY: `bitmap` came from `CreateBitmap` and nothing else holds it.
-        unsafe { DeleteObject(bitmap.into()) }
-            .ok()
-            .map_err(error::win32("DeleteObject"))?;
+        let bitmap = unsafe { Owned::new(bitmap) };
+        let result = opaque_side("mono", &bitmap);
         assert!(
             matches!(&result, Err(Error::IconBitmap { target }) if target == "mono"),
             "got {result:?}"
         );
-        Ok(())
     }
 
     #[test]

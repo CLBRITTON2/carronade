@@ -109,9 +109,9 @@ pub fn measure(config: &Config, em: f32, scale: f32, measured: &Measured) -> Lay
     };
 
     // Counts of cells, far below where f32 stops being exact.
-    let (columns, lines) = (list.columns.get(), list.lines.get());
+    let (columns, lines) = (list.columns.get().get(), list.lines.get().get());
     let (padding, spacing) = (px(list.padding), px(list.spacing));
-    let (inner, icon) = (px(element.padding), px(element.icon));
+    let (inner, icon) = (px(element.padding), element.icon.px(em, scale));
     let cell_height = 2.0 * inner + icon.max(line);
     let top = bar.bottom + margin;
     let grid = Rect {
@@ -122,7 +122,7 @@ pub fn measure(config: &Config, em: f32, scale: f32, measured: &Measured) -> Lay
     };
     let cell_width = (grid.right - grid.left + spacing) / columns as f32 - spacing;
     let height = (grid.bottom + padding + border).ceil();
-    let cells = (0..columns * lines)
+    let cells = (0..list.page().get())
         .map(|slot| {
             let left = grid.left + (slot / lines) as f32 * (cell_width + spacing);
             let top = grid.top + (slot % lines) as f32 * (cell_height + spacing);

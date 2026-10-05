@@ -175,8 +175,47 @@ impl Settings {
 /// Each list, found the first time the picker shows it.
 #[derive(Debug)]
 struct Found {
-    apps: Option<Vec<App>>,
-    files: Option<Vec<files::Entry>>,
+    apps: Option<Listing<App>>,
+    files: Option<Listing<files::Entry>>,
+}
+
+/// A list and where it came from.
+#[derive(Debug)]
+enum Listing<T> {
+    /// Read from its cache, so possibly stale.
+    Cached(Vec<T>),
+    Listed(Vec<T>),
+}
+
+impl<T> Listing<T> {
+    fn new(
+        cached: Option<Vec<T>>,
+        list: impl FnOnce() -> Result<Vec<T>, Error>,
+    ) -> Result<Self, Error> {
+        Ok(match cached {
+            Some(items) => Listing::Cached(items),
+            None => Listing::Listed(list()?),
+        })
+    }
+
+    fn items(&self) -> &[T] {
+        match self {
+            Listing::Cached(items) | Listing::Listed(items) => items,
+        }
+    }
+}
+
+/// Saves a list the picker showed: listed again when it came from the cache, as it is when it was just listed.
+fn refresh<T>(
+    shown: Option<&Listing<T>>,
+    list: impl FnOnce() -> Result<Vec<T>, Error>,
+    save: impl FnOnce(&[T]) -> Result<(), Error>,
+) -> Result<(), Error> {
+    match shown {
+        Some(Listing::Cached(_)) => save(&list()?),
+        Some(Listing::Listed(items)) => save(items),
+        None => Ok(()),
+    }
 }
 
 impl Found {
@@ -189,12 +228,12 @@ impl Found {
                     } else {
                         None
                     };
-                    self.apps = Some(last.map_or_else(apps::list, Ok)?);
+                    self.apps = Some(Listing::new(last, apps::list)?);
                 }
                 let apps = self
                     .apps
                     .iter()
-                    .flatten()
+                    .flat_map(Listing::items)
                     .map(|app| Item::App(app.clone(), boost(&settings.app_boosts, &app.id)));
                 apps.chain(Command::ALL.map(Item::Command)).collect()
             }
@@ -205,11 +244,11 @@ impl Found {
                     } else {
                         None
                     };
-                    self.files = Some(last.map_or_else(|| files::list(&settings.roots), Ok)?);
+                    self.files = Some(Listing::new(last, || files::list(&settings.roots))?);
                 }
                 self.files
                     .iter()
-                    .flatten()
+                    .flat_map(Listing::items)
                     .map(|entry| {
                         Item::Entry(entry.clone(), boost(&settings.file_boosts, &entry.path))
                     })
@@ -315,11 +354,17 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         }
     };
     // After the picker closes, since listing beside it slowed its startup by tens of ms.
-    if settings.apps_cache && found.apps.is_some() {
-        apps::save(&apps::cache_path()?, &apps::list()?)?;
+    if settings.apps_cache {
+        refresh(found.apps.as_ref(), apps::list, |apps| {
+            apps::save(&apps::cache_path()?, apps)
+        })?;
     }
-    if settings.files_cache && found.files.is_some() {
-        files::save(&files::cache_path()?, &files::list(&settings.roots)?)?;
+    if settings.files_cache {
+        refresh(
+            found.files.as_ref(),
+            || files::list(&settings.roots),
+            |entries| files::save(&files::cache_path()?, entries),
+        )?;
     }
     Ok(picked)
 }

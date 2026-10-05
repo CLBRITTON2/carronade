@@ -3,6 +3,7 @@
 mod common;
 
 use std::error::Error;
+use std::io::Write;
 use std::process::Stdio;
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -11,13 +12,16 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 
 use common::{CONFIG, Exit, Outcome, Picker, carronade, turn};
 
-/// What `carronade dmenu` prints to stderr, with the shipped config edited by `change`, when it fails before opening.
-fn config_error(
-    name: &str,
-    change: impl FnOnce(String) -> String,
-) -> Result<String, Box<dyn Error>> {
+/// What `carronade dmenu` prints to stderr, with `from` replaced by `to` in the shipped config, when it fails before
+/// opening.
+fn config_error(name: &str, from: &str, to: &str) -> Result<String, Box<dyn Error>> {
+    // A checkout with core.autocrlf, as on the CI runner, has CRLF line ends.
+    let shipped = std::fs::read_to_string(CONFIG)?.replace("\r\n", "\n");
+    if !shipped.contains(from) {
+        return Err(format!("the shipped config has no {from:?}").into());
+    }
     let path = format!("{}/{name}.toml", env!("CARGO_TARGET_TMPDIR"));
-    std::fs::write(&path, change(std::fs::read_to_string(CONFIG)?))?;
+    std::fs::write(&path, shipped.replace(from, to))?;
     let output = carronade(&path)
         .arg("dmenu")
         .stdin(Stdio::null())
@@ -52,12 +56,13 @@ fn enter_prints_the_match() -> Outcome {
 #[test]
 fn an_orphan_surrogate_types_nothing() -> Outcome {
     let _turn = turn();
-    let picker = dmenu("alpha\ngamma\n")?;
+    // No items, so Enter prints the query itself.
+    let picker = dmenu("")?;
     // A low surrogate alone, then a high one followed by a letter instead of its low half.
     picker.type_units(&[0xdc00, 0xd83d, u16::from(b'g')])?;
     picker.type_query("am")?;
     picker.press(VK_RETURN)?;
-    picked(&picker.exit()?, "gamma");
+    picked(&picker.exit()?, "gam");
     Ok(())
 }
 
@@ -262,10 +267,32 @@ fn a_missing_config_is_named_in_the_error() -> Outcome {
 }
 
 #[test]
+fn items_that_are_not_utf8_are_an_error() -> Outcome {
+    let mut child = carronade(CONFIG)
+        .arg("dmenu")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Dropping stdin closes it, which ends dmenu's item list.
+    child
+        .stdin
+        .take()
+        .ok_or("carronade has no stdin")?
+        .write_all(b"alpha\n\xff\n")?;
+    let output = child.wait_with_output()?;
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.starts_with("carronade: reading items from stdin failed: "),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
 fn an_unknown_config_field_is_an_error() -> Outcome {
-    let stderr = config_error("unknown_field", |text| {
-        text.replace("[list]", "[list]\ncycle = true")
-    })?;
+    let stderr = config_error("unknown_field", "[list]", "[list]\ncycle = true")?;
     assert!(
         stderr.contains("is invalid") && stderr.contains("cycle"),
         "{stderr}"
@@ -275,9 +302,11 @@ fn an_unknown_config_field_is_an_error() -> Outcome {
 
 #[test]
 fn a_missing_font_is_an_error() -> Outcome {
-    let stderr = config_error("missing_font", |text| {
-        text.replace("family = \"Segoe UI\"", "family = \"No Such Font\"")
-    })?;
+    let stderr = config_error(
+        "missing_font",
+        "family = \"Segoe UI\"",
+        "family = \"No Such Font\"",
+    )?;
     assert_eq!(
         stderr,
         "carronade: the font family \"No Such Font\" is not installed\n"
@@ -287,11 +316,52 @@ fn a_missing_font_is_an_error() -> Outcome {
 
 #[test]
 fn a_zero_font_size_is_an_error() -> Outcome {
-    let stderr = config_error("zero_font_size", |text| {
-        text.replace("size = 11", "size = 0")
-    })?;
+    let stderr = config_error("zero_font_size", "size = 11", "size = 0")?;
     assert!(
-        stderr.contains("is invalid") && stderr.contains("0 is not a font size above 0 points"),
+        stderr.contains("is invalid")
+            && stderr.contains("0 is not a font size from 4 to 72 points"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_zero_column_count_is_an_error() -> Outcome {
+    let stderr = config_error("zero_columns", "columns = 1", "columns = 0")?;
+    assert!(
+        stderr.contains("is invalid") && stderr.contains("0 is not a count from 1 to 64"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_oversized_icon_is_an_error() -> Outcome {
+    let stderr = config_error("oversized_icon", "icon = \"2em\"", "icon = \"5em\"")?;
+    assert!(
+        stderr.contains("is invalid")
+            && stderr.contains("\"5em\" is not an icon side from 1px to 256px or 0.25em to 4em"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_relative_root_is_an_error() -> Outcome {
+    let stderr = config_error("relative_root", "roots = ['~\\dev']", "roots = ['dev']")?;
+    assert!(
+        stderr.contains("sets files.roots to \"dev\", which is neither absolute nor below ~"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_window_too_large_to_allocate_is_an_error() -> Outcome {
+    let _turn = turn();
+    let stderr = config_error("huge_window", "width = \"40em\"", "width = \"100000em\"")?;
+    assert!(
+        stderr.contains("px picker failed, the config's lengths are too large"),
         "{stderr}"
     );
     Ok(())
@@ -299,9 +369,11 @@ fn a_zero_font_size_is_an_error() -> Outcome {
 
 #[test]
 fn a_missing_image_is_an_error() -> Outcome {
-    let stderr = config_error("missing_image", |text| {
-        text.replace("# image = ", "image = 'C:\\carronade\\missing.png'\n# ")
-    })?;
+    let stderr = config_error(
+        "missing_image",
+        "# image = ",
+        "image = 'C:\\carronade\\missing.png'\n# ",
+    )?;
     assert!(
         stderr.starts_with(
             "carronade: loading the image \"C:\\\\carronade\\\\missing.png\" failed: "

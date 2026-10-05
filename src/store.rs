@@ -52,15 +52,12 @@ pub(crate) fn load<T: DeserializeOwned>(path: &Path, version: i64) -> Result<Opt
     let Some(bytes) = read(path)? else {
         return Ok(None);
     };
-    let text = String::from_utf8(bytes).map_err(|source| Error::StoreRead {
-        path: path.to_owned(),
-        source: std::io::Error::new(ErrorKind::InvalidData, source),
-    })?;
     let parse = |source| Error::StoreParse {
         path: path.to_owned(),
         source: Box::new(source),
     };
-    let mut table: Table = toml::from_str(&text).map_err(parse)?;
+    // Bytes that are not UTF-8 fail here too, as the corruption they are.
+    let mut table: Table = toml::from_slice(&bytes).map_err(parse)?;
     match table.remove(VERSION) {
         None => {}
         Some(Value::Integer(found)) if found == version => {}
@@ -113,4 +110,41 @@ pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     }
     std::fs::write(&temporary, bytes).map_err(write)?;
     std::fs::rename(&temporary, path).map_err(write)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file named for this test and process in the temp folder, removed by the test.
+    fn scratch(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("carronade-store-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn a_store_that_is_not_utf8_is_invalid() -> Result<(), Box<dyn std::error::Error>> {
+        let path = scratch("not-utf8.toml");
+        std::fs::write(&path, b"version = 1\n\xff\n")?;
+        let result = load::<Table>(&path, 1);
+        std::fs::remove_file(&path)?;
+        assert!(
+            matches!(&result, Err(Error::StoreParse { path: failed, .. }) if *failed == path),
+            "got {result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn writing_below_a_file_names_the_store() -> Result<(), Box<dyn std::error::Error>> {
+        let file = scratch("parent");
+        std::fs::write(&file, "")?;
+        let path = file.join("store.toml");
+        let result = write(&path, b"");
+        std::fs::remove_file(&file)?;
+        assert!(
+            matches!(&result, Err(Error::StoreWrite { path: failed, .. }) if *failed == path),
+            "got {result:?}"
+        );
+        Ok(())
+    }
 }

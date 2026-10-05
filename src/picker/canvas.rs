@@ -78,8 +78,8 @@ impl Canvas {
     }
 
     pub(super) fn icon_size(&self) -> u32 {
-        // Tens of px, never negative.
-        self.px(self.config.element.icon).round() as u32
+        // `config::Side` keeps it from 1 to a few thousand px.
+        self.config.element.icon.px(self.em, self.scale).round() as u32
     }
 
     pub(super) fn fill(&self, rect: Rect, radius: f32, color: Color) {

@@ -14,6 +14,18 @@ pub enum Error {
         #[source]
         source: Box<toml::de::Error>,
     },
+    #[error(
+        "the config {config:?} sets {field} to {path:?}, which is neither absolute nor below ~"
+    )]
+    RelativePath {
+        config: PathBuf,
+        field: &'static str,
+        path: PathBuf,
+    },
+    #[error(
+        "allocating a {width} by {height} px picker failed, the config's lengths are too large"
+    )]
+    Surface { width: i32, height: i32 },
     #[error("the font family {0:?} is not installed")]
     Font(String),
     #[error("DirectWrite returned no system font collection")]
@@ -61,6 +73,13 @@ pub enum Error {
     },
     #[error("{path:?} is a file with no folder above it")]
     NoParent { path: PathBuf },
+    #[error("reading the Start menu app {name:?} failed in {call}")]
+    App {
+        name: String,
+        call: &'static str,
+        #[source]
+        source: windows::core::Error,
+    },
     #[error("loading the icon of {target:?} failed in {call}")]
     Icon {
         target: String,
@@ -131,6 +150,12 @@ pub enum Error {
 /// Maps a failed Win32 call to `Error::Win32`, for `map_err`.
 pub fn win32(call: &'static str) -> impl FnOnce(windows::core::Error) -> Error {
     move |source| Error::Win32 { call, source }
+}
+
+/// Maps a failed call while reading the Start menu app `name` to `Error::App`, for `map_err`.
+pub fn app(name: &str, call: &'static str) -> impl FnOnce(windows::core::Error) -> Error {
+    let name = name.to_owned();
+    move |source| Error::App { name, call, source }
 }
 
 /// Maps a failed call while loading the icon of `target` to `Error::Icon`, for `map_err`.

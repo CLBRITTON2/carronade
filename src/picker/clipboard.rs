@@ -1,5 +1,8 @@
 //! The clipboard's text, which Ctrl+V types into the query.
 
+use std::thread::sleep;
+use std::time::Duration;
+
 use windows::Win32::Foundation::{HGLOBAL, SetLastError, WIN32_ERROR};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
@@ -9,8 +12,40 @@ use windows::Win32::System::Ole::CF_UNICODETEXT;
 
 use crate::error::{Error, last, utf16, win32};
 
+/// How often `open` tries for the clipboard, which clipboard managers and remote sessions hold for a moment.
+const OPEN_TRIES: u32 = 5;
+const OPEN_PAUSE: Duration = Duration::from_millis(10);
+
 /// The clipboard's text, or nothing when it holds none.
 pub(super) fn clipboard() -> Result<String, Error> {
+    open()?;
+    let text = clipboard_text();
+    // SAFETY: closes the clipboard this thread opened above.
+    let closed = unsafe { CloseClipboard() }.map_err(win32("CloseClipboard"));
+    // A failed read is the cause, so it wins over a failed close.
+    let text = text?;
+    closed?;
+    Ok(text)
+}
+
+/// Opens the clipboard for this thread, trying `OPEN_TRIES` times `OPEN_PAUSE` apart, then failing with the last error.
+fn open() -> Result<(), Error> {
+    let mut tries = 1;
+    loop {
+        // SAFETY: no owner window, and `clipboard` closes it on every path.
+        match unsafe { OpenClipboard(None) } {
+            Ok(()) => return Ok(()),
+            Err(error) if tries == OPEN_TRIES => return Err(win32("OpenClipboard")(error)),
+            Err(_) => {
+                tries += 1;
+                sleep(OPEN_PAUSE);
+            }
+        }
+    }
+}
+
+/// Needs the clipboard open, so its content cannot change between the format check and the read.
+fn clipboard_text() -> Result<String, Error> {
     let format = u32::from(CF_UNICODETEXT.0);
     // It returns false both for no text and for a failure, and sets the last error only for a failure.
     // SAFETY: sets this thread's last error, which nothing reads until the check below.
@@ -22,18 +57,6 @@ pub(super) fn clipboard() -> Result<String, Error> {
         }
         return Err(win32("IsClipboardFormatAvailable")(error));
     }
-    // SAFETY: no owner window, and the clipboard is closed below on every path.
-    unsafe { OpenClipboard(None) }.map_err(win32("OpenClipboard"))?;
-    let text = clipboard_text(format);
-    // SAFETY: closes the clipboard this thread opened above.
-    let closed = unsafe { CloseClipboard() }.map_err(win32("CloseClipboard"));
-    // A failed read is the cause, so it wins over a failed close.
-    let text = text?;
-    closed?;
-    Ok(text)
-}
-
-fn clipboard_text(format: u32) -> Result<String, Error> {
     // SAFETY: the caller holds the clipboard open, so the handle stays valid until it closes.
     let handle = unsafe { GetClipboardData(format) }.map_err(win32("GetClipboardData"))?;
     let global = HGLOBAL(handle.0);
@@ -77,7 +100,7 @@ mod tests {
     use windows::Win32::System::Memory::{GHND, GlobalAlloc};
 
     /// `locked_text` of a block holding `units`, zero-filled past them as `GlobalAlloc` leaves it.
-    fn text_of(units: &[u16]) -> Result<String, Box<dyn std::error::Error>> {
+    fn text_of(units: &[u16]) -> Result<Result<String, Error>, Box<dyn std::error::Error>> {
         // SAFETY: allocates a fresh block, freed below.
         let global = unsafe { GlobalAlloc(GHND, size_of_val(units)) }?;
         // SAFETY: `global` is the movable block just allocated, unlocked below.
@@ -94,14 +117,24 @@ mod tests {
         // GlobalFree returns NULL on success, which windows-rs reports as an error, so its result says nothing.
         // SAFETY: frees the unlocked block this function allocated, used no further.
         _ = unsafe { GlobalFree(Some(global)) };
-        Ok(text?)
+        Ok(text)
     }
 
     #[test]
     fn pasted_text_ends_at_its_nul_or_its_block() -> Result<(), Box<dyn std::error::Error>> {
         let units = |text: &str| -> Vec<u16> { text.encode_utf16().collect() };
-        assert_eq!(text_of(&units("ab\0cd"))?, "ab");
-        assert_eq!(text_of(&units("abc"))?, "abc");
+        assert_eq!(text_of(&units("ab\0cd"))??, "ab");
+        assert_eq!(text_of(&units("abc"))??, "abc");
+        Ok(())
+    }
+
+    #[test]
+    fn pasted_text_with_an_orphan_surrogate_is_named() -> Result<(), Box<dyn std::error::Error>> {
+        let result = text_of(&[0xd800])?;
+        assert!(
+            matches!(&result, Err(Error::Utf16 { what, .. }) if *what == "the clipboard's text"),
+            "got {result:?}"
+        );
         Ok(())
     }
 }

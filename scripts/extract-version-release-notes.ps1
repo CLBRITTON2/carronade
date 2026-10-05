@@ -19,14 +19,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $releaseNotes = Join-Path $PSScriptRoot '..\RELEASENOTES.md'
 
-$lines = Get-Content $releaseNotes
+$lines = @(Get-Content $releaseNotes)
 $heading = "## [$Version]"
 $start = [array]::FindIndex([string[]]$lines, [Predicate[string]] { param($line) $line.StartsWith($heading) })
 if ($start -lt 0) {
     throw "$releaseNotes has no '$heading' section"
 }
 $end = [array]::FindIndex([string[]]$lines, $start + 1, [Predicate[string]] { param($line) $line.StartsWith('## ') })
-$section = if ($end -lt 0) { $lines[($start + 1)..($lines.Count - 1)] } else { $lines[($start + 1)..($end - 1)] }
+$stop = if ($end -lt 0) { $lines.Count } else { $end }
+# Not a range: `a..b` counts down when the section is empty, taking the headings around it.
+$section = $lines | Select-Object -Skip ($start + 1) -First ($stop - $start - 1)
 $notes = ($section -join "`n").Trim()
 if (-not $notes) {
     throw "the '$heading' section of $releaseNotes is empty"
