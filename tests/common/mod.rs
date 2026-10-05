@@ -84,9 +84,13 @@ impl Picker {
         Ok(Self { child, window })
     }
 
-    /// Posts each UTF-16 unit as `WM_CHAR`. Posted, not sent, so it stays in order with `press`, as real typing does.
     pub fn type_query(&self, text: &str) -> Outcome {
-        for unit in text.encode_utf16() {
+        self.type_units(&text.encode_utf16().collect::<Vec<u16>>())
+    }
+
+    /// Posts each UTF-16 unit as `WM_CHAR`. Posted, not sent, so it stays in order with `press`, as real typing does.
+    pub fn type_units(&self, units: &[u16]) -> Outcome {
+        for &unit in units {
             self.post(WM_CHAR, usize::from(unit))?;
         }
         Ok(())

@@ -50,6 +50,18 @@ fn enter_prints_the_match() -> Outcome {
 }
 
 #[test]
+fn an_orphan_surrogate_types_nothing() -> Outcome {
+    let _turn = turn();
+    let picker = dmenu("alpha\ngamma\n")?;
+    // A low surrogate alone, then a high one followed by a letter instead of its low half.
+    picker.type_units(&[0xdc00, 0xd83d, u16::from(b'g')])?;
+    picker.type_query("am")?;
+    picker.press(VK_RETURN)?;
+    picked(&picker.exit()?, "gamma");
+    Ok(())
+}
+
+#[test]
 fn enter_with_no_query_prints_the_first_item() -> Outcome {
     let _turn = turn();
     let picker = dmenu("alpha\nbeta\n")?;

@@ -103,7 +103,8 @@ fn key(key: VIRTUAL_KEY) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// Inserts a typed UTF-16 unit. Control characters, which Backspace and Enter also type, insert nothing.
+/// Inserts a typed UTF-16 unit. Control characters, which Backspace and Enter also type, insert nothing, and neither
+/// does an orphan surrogate.
 fn typed(unit: u16) -> Result<(), Error> {
     let units = with(|state| match (state.surrogate.take(), unit) {
         (_, 0xd800..=0xdbff) => {
@@ -113,7 +114,7 @@ fn typed(unit: u16) -> Result<(), Error> {
         (Some(high), _) => vec![high, unit],
         (None, _) => vec![unit],
     })?;
-    let text = String::from_utf16(&units)?;
+    let text: String = char::decode_utf16(units).filter_map(Result::ok).collect();
     edit(|line| line.insert(&text))
 }
 
