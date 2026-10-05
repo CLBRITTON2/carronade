@@ -3,7 +3,9 @@
 use std::path::Path;
 
 use windows::Win32::Foundation::ERROR_CANCELLED;
-use windows::Win32::UI::Shell::{SEE_MASK_FLAG_NO_UI, SHELLEXECUTEINFOW, ShellExecuteExW};
+use windows::Win32::UI::Shell::{
+    SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
+};
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -55,7 +57,8 @@ fn shell_execute(
     let mut info = SHELLEXECUTEINFOW {
         // A SHELLEXECUTEINFOW is 112 bytes.
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_FLAG_NO_UI,
+        // The process exits right after the call, which ShellExecuteEx documents as needing NOASYNC.
+        fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC,
         lpVerb: verb,
         lpFile: PCWSTR(file.as_ptr()),
         lpDirectory: directory,

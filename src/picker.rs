@@ -175,11 +175,13 @@ pub fn browse<T: Row + Clone, R>(
     switch: Option<String>,
     next: impl FnMut(Action<T>) -> Result<Step<T, R>, Error>,
 ) -> Result<R, Error> {
-    let window = open(config, listed(&items), switch)?;
-    let choice = steps(items, next);
+    let shown = listed(&items);
+    let prepared = prepare(config)?;
+    let window = create_window(prepared.origin, prepared.width, prepared.height)?;
+    let choice = open(window, prepared, shown, switch).and_then(|()| steps(items, next));
     // Released now: a COM object released by the thread-local destructors at exit changes the exit code.
     let state = STATE.take();
-    // SAFETY: `open` created `window` on this thread and nothing destroyed it since.
+    // SAFETY: `create_window` created `window` on this thread, and only this call destroys it.
     let destroyed = unsafe { DestroyWindow(window) }.map_err(win32("DestroyWindow"));
     let saved = state.map_or(Ok(()), |state| save_icons(state.fetched, state.cache));
     // The pick's own error is the cause, so it wins over a failed cleanup.
@@ -274,7 +276,22 @@ fn pump() -> Result<Action<usize>, Error> {
     }
 }
 
-fn open(config: Config, items: Vec<Listed>, switch: Option<String>) -> Result<HWND, Error> {
+/// What the picker sets up before its window exists.
+struct Prepared {
+    d2d: ID2D1Factory,
+    dwrite: IDWriteFactory,
+    wic: IWICImagingFactory,
+    formats: Formats,
+    layout: layout::Layout,
+    config: Config,
+    em: f32,
+    scale: f32,
+    origin: POINT,
+    width: i32,
+    height: i32,
+}
+
+fn prepare(config: Config) -> Result<Prepared, Error> {
     // SAFETY: takes a predefined context constant and runs before this process creates a window.
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
         .map_err(win32("SetProcessDpiAwarenessContext"))?;
@@ -313,7 +330,41 @@ fn open(config: Config, items: Vec<Listed>, switch: Option<String>) -> Result<HW
         x: work.left + (work.right - work.left - width) / 2,
         y: work.top + (work.bottom - work.top - height) / 2,
     };
-    let window = create_window(origin, width, height)?;
+    Ok(Prepared {
+        d2d,
+        dwrite,
+        wic,
+        formats,
+        layout,
+        config,
+        em,
+        scale,
+        origin,
+        width,
+        height,
+    })
+}
+
+/// Draws the first frame of `items` into `window` and shows it in front.
+fn open(
+    window: HWND,
+    prepared: Prepared,
+    items: Vec<Listed>,
+    switch: Option<String>,
+) -> Result<(), Error> {
+    let Prepared {
+        d2d,
+        dwrite,
+        wic,
+        formats,
+        layout,
+        config,
+        em,
+        scale,
+        origin,
+        width,
+        height,
+    } = prepared;
     let surface = surface(&d2d, width, height)?;
     let target = surface.target;
     // SAFETY: `target` is live and the color a local that outlives the call.
@@ -362,11 +413,10 @@ fn open(config: Config, items: Vec<Listed>, switch: Option<String>) -> Result<HW
     }));
     // The first frame goes up without icons, which take tens of ms each to load.
     with(State::draw)??;
-    // SAFETY: `window` was created above on this thread.
+    // SAFETY: `browse` created `window` on this thread.
     _ = unsafe { ShowWindow(window, SW_SHOW) };
     bring_to_front(window)?;
-    render()?;
-    Ok(window)
+    render()
 }
 
 /// The monitor the picker opens on, the one holding the foreground window.

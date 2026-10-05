@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY;
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CHAR, WM_KEYDOWN,
-    WM_MOUSEWHEEL,
+    FindWindowExW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CHAR, WM_CLOSE,
+    WM_KEYDOWN, WM_MOUSEWHEEL,
 };
 use windows::core::w;
 
@@ -110,6 +110,15 @@ impl Picker {
             WM_MOUSEWHEEL,
             usize::from(u16::from_ne_bytes(delta.to_ne_bytes())) << 16,
         )
+    }
+
+    /// Asks the window to close, as Alt+F4 or a window manager does.
+    #[allow(
+        dead_code,
+        reason = "each test binary compiles its own copy, and only dmenu closes"
+    )]
+    pub fn close(&self) -> Outcome {
+        self.post(WM_CLOSE, 0)
     }
 
     fn post(&self, message: u32, wparam: usize) -> Outcome {

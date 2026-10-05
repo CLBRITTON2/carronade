@@ -6,8 +6,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_LEFT, VK_N, VK_P, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL,
+    DefWindowProcW, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL,
 };
 
 use super::clipboard::clipboard;
@@ -39,6 +39,8 @@ pub(super) extern "system" fn window_proc(
         WM_ACTIVATE if (wparam.0 & 0xffff) as u32 == WA_INACTIVE => {
             finish(Ok(Action::Pick(Choice::Cancel)))
         }
+        // DefWindowProcW would destroy the window, which only `browse` may do.
+        WM_CLOSE => finish(Ok(Action::Pick(Choice::Cancel))),
         // SAFETY: passes on the message this procedure received, unchanged.
         _ => return unsafe { DefWindowProcW(window, message, wparam, lparam) },
     };

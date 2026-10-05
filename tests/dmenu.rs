@@ -171,6 +171,19 @@ fn escape_cancels_with_exit_code_1() -> Outcome {
 }
 
 #[test]
+fn closing_the_window_cancels() -> Outcome {
+    let _turn = turn();
+    let picker = dmenu("alpha\n")?;
+    picker.close()?;
+    let exit = picker.exit()?;
+    assert_eq!(
+        (exit.code, exit.stdout.as_str(), exit.stderr.as_str()),
+        (Some(1), "", "")
+    );
+    Ok(())
+}
+
+#[test]
 fn losing_focus_cancels() -> Outcome {
     let _turn = turn();
     let first = dmenu("alpha\n")?;
