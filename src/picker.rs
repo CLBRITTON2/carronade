@@ -281,7 +281,7 @@ fn open(config: Config, items: Vec<Listed>, switch: Option<String>) -> Result<HW
     let monitor = foreground_monitor()?;
     // A DPI is in the hundreds, exact in f32.
     let scale = monitor.dpi as f32 / 96.0;
-    let em = config.font.size * monitor.dpi as f32 / 72.0;
+    let em = config.font.size.get() * monitor.dpi as f32 / 72.0;
 
     platform::com()?;
     // SAFETY: the single-threaded factory is used only on this thread, and no debug options are passed.

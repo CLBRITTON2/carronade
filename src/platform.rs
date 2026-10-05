@@ -6,7 +6,7 @@ use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoTa
 use windows::Win32::UI::Shell::{KF_FLAG_DEFAULT, SHGetKnownFolderPath};
 use windows::core::GUID;
 
-use crate::error::{Error, win32};
+use crate::error::{Error, utf16, win32};
 
 /// The shell needs COM on the calling thread. A second call on the same thread is a no-op.
 pub(crate) fn com() -> Result<(), Error> {
@@ -24,5 +24,5 @@ pub(crate) fn known_folder(id: &GUID) -> Result<PathBuf, Error> {
     let text = unsafe { folder.to_string() };
     // SAFETY: the shell allocated `folder` with the COM allocator and nothing reads it after this.
     unsafe { CoTaskMemFree(Some(folder.0 as _)) };
-    Ok(PathBuf::from(text?))
+    Ok(PathBuf::from(text.map_err(utf16("a known folder's path"))?))
 }

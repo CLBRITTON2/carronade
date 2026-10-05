@@ -102,7 +102,8 @@ pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, Error> {
 /// Writes `bytes` to `path` through a temporary file so a reader never sees half of them.
 pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
+    // Per process: two carronades saving at once would otherwise write, and rename, the same file.
+    temporary.push(format!(".{}.tmp", std::process::id()));
     let write = |source| Error::StoreWrite {
         path: path.to_owned(),
         source,

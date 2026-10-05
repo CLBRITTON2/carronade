@@ -7,7 +7,7 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 
-use crate::error::{Error, last, win32};
+use crate::error::{Error, last, utf16, win32};
 
 /// The clipboard's text, or nothing when it holds none.
 pub(super) fn clipboard() -> Result<String, Error> {
@@ -67,7 +67,7 @@ unsafe fn locked_text(global: HGLOBAL, data: *const u16) -> Result<String, Error
         Some(len) => block.split_at(len).0,
         None => block,
     };
-    Ok(String::from_utf16(text)?)
+    String::from_utf16(text).map_err(utf16("the clipboard's text"))
 }
 
 #[cfg(test)]

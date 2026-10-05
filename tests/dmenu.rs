@@ -273,6 +273,18 @@ fn a_missing_font_is_an_error() -> Outcome {
 }
 
 #[test]
+fn a_zero_font_size_is_an_error() -> Outcome {
+    let stderr = config_error("zero_font_size", |text| {
+        text.replace("size = 11", "size = 0")
+    })?;
+    assert!(
+        stderr.contains("is invalid") && stderr.contains("0 is not a font size above 0 points"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_missing_image_is_an_error() -> Outcome {
     let stderr = config_error("missing_image", |text| {
         text.replace("# image = ", "image = 'C:\\carronade\\missing.png'\n# ")

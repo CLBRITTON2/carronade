@@ -34,8 +34,12 @@ pub enum Error {
         #[source]
         source: windows::core::Error,
     },
-    #[error("text is not valid UTF-16")]
-    Utf16(#[from] std::string::FromUtf16Error),
+    #[error("{what} is not valid UTF-16")]
+    Utf16 {
+        what: &'static str,
+        #[source]
+        source: std::string::FromUtf16Error,
+    },
     #[error("launching {target:?} failed")]
     Launch {
         target: String,
@@ -137,6 +141,11 @@ pub fn icon(target: &str, call: &'static str) -> impl FnOnce(windows::core::Erro
         call,
         source,
     }
+}
+
+/// Maps invalid UTF-16 in `what` to `Error::Utf16`, for `map_err`.
+pub fn utf16(what: &'static str) -> impl FnOnce(std::string::FromUtf16Error) -> Error {
+    move |source| Error::Utf16 { what, source }
 }
 
 /// The calling thread's last Win32 error, for calls that report failure only through their return value.

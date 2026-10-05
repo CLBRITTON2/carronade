@@ -18,11 +18,35 @@ use crate::error::{self, Error};
 use crate::platform::com;
 use crate::store::{self, UnixSeconds};
 
-/// A `side` px square icon as rows of 32-bit premultiplied BGRA.
+/// A `side` px square icon as rows of 32-bit premultiplied BGRA. `bgra` always holds `side * side * 4` bytes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pixels {
-    pub side: u32,
-    pub bgra: Vec<u8>,
+    side: u32,
+    bgra: Vec<u8>,
+}
+
+impl Pixels {
+    /// `bgra` as a `side` px square, or `None` when its length is not `side * side * 4`.
+    #[must_use]
+    pub fn new(side: u32, bgra: Vec<u8>) -> Option<Self> {
+        (bgra.len() == byte_count(side)?).then_some(Self { side, bgra })
+    }
+
+    #[must_use]
+    pub fn side(&self) -> u32 {
+        self.side
+    }
+
+    #[must_use]
+    pub fn bgra(&self) -> &[u8] {
+        &self.bgra
+    }
+}
+
+/// The bytes of a `side` px square of 32-bit pixels, or `None` past `usize`.
+fn byte_count(side: u32) -> Option<usize> {
+    let edge = usize::try_from(side).ok()?;
+    edge.checked_mul(edge)?.checked_mul(4)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +87,7 @@ pub fn save(path: &Path, icons: &[Cached]) -> Result<(), Error> {
 }
 
 /// The cached icon for `target` at `side` px, unless it is older than `MAX_AGE_SECONDS` at `now`.
+#[must_use]
 pub fn find<'a>(
     icons: &'a [Cached],
     target: &str,
@@ -72,11 +97,12 @@ pub fn find<'a>(
     icons
         .iter()
         .find(|icon| icon.target == target)
-        .filter(|icon| icon.pixels.side == side && now.since(icon.fetched) < MAX_AGE_SECONDS)
+        .filter(|icon| icon.pixels.side() == side && now.since(icon.fetched) < MAX_AGE_SECONDS)
         .map(|icon| &icon.pixels)
 }
 
 /// `fetched` ahead of `previous`, one icon per target, at most `LIMIT`.
+#[must_use]
 pub fn merged(fetched: Vec<Cached>, previous: Vec<Cached>) -> Vec<Cached> {
     let mut seen = HashSet::new();
     fetched
@@ -155,9 +181,9 @@ const HALF_LARGEST: usize = LARGEST.unsigned_abs() as usize / 2;
 /// small one, unscaled, in the middle of a translucent frame, so that one is fetched again at `size`.
 pub fn display_icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
     let large = icon(target, LARGEST)?;
-    let side = opaque_side(target, large);
-    if let Ok(side) = side
-        && side >= HALF_LARGEST
+    let opaque = opaque_side(target, large);
+    if let Ok(opaque) = opaque
+        && opaque >= HALF_LARGEST
     {
         return Ok(large);
     }
@@ -166,7 +192,7 @@ pub fn display_icon(target: &str, size: i32) -> Result<HBITMAP, Error> {
         .ok()
         .map_err(error::icon(target, "DeleteObject"));
     // The bitmap error is the cause, so it wins over a failed delete.
-    side?;
+    opaque?;
     deleted?;
     icon(target, size)
 }
@@ -234,8 +260,8 @@ pub(crate) fn encode(icons: &[Cached]) -> Vec<u8> {
         bytes.extend((icon.target.len() as u32).to_le_bytes());
         bytes.extend(icon.target.as_bytes());
         bytes.extend(icon.fetched.0.to_le_bytes());
-        bytes.extend(icon.pixels.side.to_le_bytes());
-        bytes.extend(&icon.pixels.bgra);
+        bytes.extend(icon.pixels.side().to_le_bytes());
+        bytes.extend(icon.pixels.bgra());
     }
     bytes
 }
@@ -249,16 +275,11 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<Vec<Cached>> {
         let (target, after) = after.split_at_checked(usize::try_from(length).ok()?)?;
         let (fetched, after) = after.split_first_chunk::<8>()?;
         let (side, after) = u32_at(after)?;
-        let edge = usize::try_from(side).ok()?;
-        let size = edge.checked_mul(edge)?.checked_mul(4)?;
-        let (bgra, after) = after.split_at_checked(size)?;
+        let (bgra, after) = after.split_at_checked(byte_count(side)?)?;
         icons.push(Cached {
             target: String::from_utf8(target.to_vec()).ok()?,
             fetched: UnixSeconds(u64::from_le_bytes(*fetched)),
-            pixels: Pixels {
-                side,
-                bgra: bgra.to_vec(),
-            },
+            pixels: Pixels::new(side, bgra.to_vec())?,
         });
         rest = after;
     }
@@ -289,6 +310,13 @@ mod tests {
 
     fn targets(icons: &[Cached]) -> Vec<&str> {
         icons.iter().map(|icon| icon.target.as_str()).collect()
+    }
+
+    #[test]
+    fn pixels_take_exactly_four_bytes_per_pixel() {
+        assert!(Pixels::new(2, vec![0; 16]).is_some());
+        assert!(Pixels::new(2, vec![0; 15]).is_none());
+        assert!(Pixels::new(u32::MAX, Vec::new()).is_none());
     }
 
     #[test]

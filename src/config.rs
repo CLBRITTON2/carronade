@@ -26,8 +26,32 @@ pub struct Config {
 pub struct Font {
     /// A DirectWrite family name, as the Fonts settings page lists it.
     pub family: String,
-    /// In points. One `em` is this size.
-    pub size: f32,
+    /// One `em` is this size.
+    pub size: Points,
+}
+
+/// A font size in points, finite and above 0.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(try_from = "f32")]
+pub struct Points(f32);
+
+impl Points {
+    #[must_use]
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl TryFrom<f32> for Points {
+    type Error = String;
+
+    fn try_from(points: f32) -> Result<Self, String> {
+        if points.is_finite() && points > 0.0 {
+            Ok(Points(points))
+        } else {
+            Err(format!("{points} is not a font size above 0 points"))
+        }
+    }
 }
 
 /// The popup's frame. Its height follows from the input bar and the list.
@@ -255,6 +279,14 @@ mod tests {
     fn lengths_need_a_unit_and_a_positive_number() {
         for text in ["3", "3pt", "-1px", "em", "NaNpx", "infem"] {
             assert!(length(text).is_err(), "{text:?} parsed");
+        }
+    }
+
+    #[test]
+    fn font_sizes_need_a_finite_number_above_0() {
+        assert_eq!(Points::try_from(10.5).map(Points::get), Ok(10.5));
+        for points in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(Points::try_from(points).is_err(), "{points} parsed");
         }
     }
 

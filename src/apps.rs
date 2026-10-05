@@ -12,7 +12,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{Interface, PWSTR};
 
-use crate::error::{Error, win32};
+use crate::error::{Error, utf16, win32};
 use crate::picker::{Picture, Row};
 use crate::platform::com;
 use crate::store;
@@ -28,6 +28,7 @@ pub struct App {
 }
 
 impl App {
+    #[must_use]
     pub fn target(&self) -> String {
         format!("shell:AppsFolder\\{}", self.id)
     }
@@ -110,7 +111,7 @@ pub fn save(path: &Path, apps: &[App]) -> Result<(), Error> {
 fn display_name(item: &IShellItem, form: SIGDN) -> Result<String, Error> {
     // SAFETY: `item` is a live shell item, and `taken` frees the returned string.
     let name = unsafe { item.GetDisplayName(form) }.map_err(win32("IShellItem::GetDisplayName"))?;
-    taken(name)
+    taken(name, "an app's display name")
 }
 
 /// What the shortcut behind `item` opens, or `None` for an app with no shortcut, as packaged apps are.
@@ -120,7 +121,7 @@ fn link_target(item: &IShellItem) -> Result<Option<String>, Error> {
         .map_err(win32("IShellItem::cast::<IShellItem2>"))?;
     // SAFETY: `item` is a live shell item, the key is a static PROPERTYKEY, and `taken` frees the returned string.
     match unsafe { item.GetString(&PKEY_Link_TargetParsingPath) } {
-        Ok(target) => taken(target).map(Some),
+        Ok(target) => taken(target, "a shortcut's target").map(Some),
         Err(error) if error.code() == ERROR_NOT_FOUND.to_hresult() => Ok(None),
         Err(error) => Err(win32("IShellItem2::GetString(Link.TargetParsingPath)")(
             error,
@@ -136,13 +137,13 @@ fn exe_name(target: &str) -> Option<String> {
     path.file_stem()?.to_str().map(str::to_owned)
 }
 
-/// `text` as a `String`, freeing the shell's copy.
-fn taken(text: PWSTR) -> Result<String, Error> {
+/// `text`, which is `what`, as a `String`, freeing the shell's copy.
+fn taken(text: PWSTR, what: &'static str) -> Result<String, Error> {
     // SAFETY: the shell returned `text` NUL-terminated and it is still allocated.
     let owned = unsafe { text.to_string() };
     // SAFETY: the shell allocated `text` with the COM allocator and nothing reads it after this.
     unsafe { CoTaskMemFree(Some(text.0 as _)) };
-    Ok(owned?)
+    owned.map_err(utf16(what))
 }
 
 #[cfg(test)]

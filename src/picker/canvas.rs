@@ -192,9 +192,10 @@ impl Canvas {
 
     /// `pixels` as a bitmap for this canvas, a pixel per DIP like the render target.
     pub(super) fn bitmap(&self, pixels: &Pixels) -> Result<ID2D1Bitmap, Error> {
+        let side = pixels.side();
         let size = D2D_SIZE_U {
-            width: pixels.side,
-            height: pixels.side,
+            width: side,
+            height: side,
         };
         let properties = D2D1_BITMAP_PROPERTIES {
             pixelFormat: D2D1_PIXEL_FORMAT {
@@ -204,11 +205,11 @@ impl Canvas {
             dpiX: 96.0,
             dpiY: 96.0,
         };
-        let data = pixels.bgra.as_ptr().cast();
-        // SAFETY: `bgra` holds `side` rows of `side * 4` bytes, which the call copies before returning.
+        let data = pixels.bgra().as_ptr().cast();
+        // SAFETY: `Pixels` keeps `bgra` at `side` rows of `side * 4` bytes, which the call copies before returning.
         unsafe {
             self.target
-                .CreateBitmap(size, Some(data), pixels.side * 4, &raw const properties)
+                .CreateBitmap(size, Some(data), side * 4, &raw const properties)
         }
         .map_err(win32("ID2D1RenderTarget::CreateBitmap"))
     }
