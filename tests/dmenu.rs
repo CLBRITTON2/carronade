@@ -3,7 +3,9 @@
 mod common;
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::io::Write;
+use std::os::windows::ffi::OsStringExt;
 use std::process::Stdio;
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -254,6 +256,20 @@ fn unknown_mode_fails_with_usage() -> Outcome {
     assert_eq!(
         stderr,
         "carronade: \"show\" is not a mode, use apps, files or dmenu\n\nRun carronade --help for usage.\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_mode_that_is_not_unicode_fails_with_usage() -> Outcome {
+    let output = carronade(CONFIG)
+        .arg(OsString::from_wide(&[0xd800]))
+        .output()?;
+    let stderr = String::from_utf8(output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(
+        stderr,
+        "carronade: \"\\u{d800}\" is not a mode, use apps, files or dmenu\n\nRun carronade --help for usage.\n"
     );
     Ok(())
 }

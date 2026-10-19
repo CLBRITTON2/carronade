@@ -4,6 +4,7 @@
 //! `%APPDATA%\carronade\config.toml`.
 
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -23,7 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MessageBoxW};
 use windows::core::{HSTRING, w};
 
 fn main() -> ExitCode {
-    match parse(std::env::args().skip(1).collect()) {
+    match parse(std::env::args_os().skip(1).collect()) {
         Ok(Request::Help) => print("help", &help()),
         Ok(Request::Version) => print("version", VERSION),
         Ok(Request::Run { config, mode }) => match run(config.as_deref(), mode) {
@@ -94,12 +95,12 @@ enum Usage {
     #[error("--config needs a path\n\nRun carronade --help for usage.")]
     NoConfigPath,
     #[error("{0:?} is not a mode, use apps, files or dmenu\n\nRun carronade --help for usage.")]
-    NotAMode(String),
+    NotAMode(OsString),
     #[error("unexpected arguments {0:?}\n\nRun carronade --help for usage.")]
-    Unexpected(Vec<String>),
+    Unexpected(Vec<OsString>),
 }
 
-fn parse(args: Vec<String>) -> Result<Request, Usage> {
+fn parse(args: Vec<OsString>) -> Result<Request, Usage> {
     match args.as_slice() {
         [] => Err(Usage::Missing),
         [flag] if flag == "-h" || flag == "--help" => Ok(Request::Help),
@@ -118,11 +119,11 @@ fn parse(args: Vec<String>) -> Result<Request, Usage> {
     }
 }
 
-fn mode_named(word: &str) -> Result<Mode, Usage> {
-    match word {
-        "apps" => Ok(Mode::Apps),
-        "files" => Ok(Mode::Files),
-        "dmenu" => Ok(Mode::Dmenu),
+fn mode_named(word: &OsStr) -> Result<Mode, Usage> {
+    match word.to_str() {
+        Some("apps") => Ok(Mode::Apps),
+        Some("files") => Ok(Mode::Files),
+        Some("dmenu") => Ok(Mode::Dmenu),
         _ => Err(Usage::NotAMode(word.to_owned())),
     }
 }
@@ -379,16 +380,32 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
             | Action::Admin(Item::Command(_) | Item::Entry(..)) => Step::Stay,
         })
     })?;
-    let picked = match choice {
+    let opened = open(choice, &apps_history, &files_history, &settings);
+    // After a failed launch too, which may be of a cached item deleted since: the relist drops it.
+    let relisted = relist(&found, &settings);
+    // The launch's own error is the cause, so it wins over a failed relist.
+    let picked = opened?;
+    relisted?;
+    Ok(picked)
+}
+
+/// Acts on what a search ended with, returning whether there was a pick.
+fn open(
+    choice: Picked,
+    apps_history: &Path,
+    files_history: &Path,
+    settings: &Settings,
+) -> Result<bool, Error> {
+    Ok(match choice {
         Picked::Open(Choice::Item(Item::App(app, _))) => {
             shell::launch(&app.target())?;
-            record_app(&apps_history, &settings, &app)?;
+            record_app(apps_history, settings, &app)?;
             true
         }
         Picked::Admin(app) => {
             let launched = shell::launch_as_admin(&app.target())?;
             if launched {
-                record_app(&apps_history, &settings, &app)?;
+                record_app(apps_history, settings, &app)?;
             }
             launched
         }
@@ -398,7 +415,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         }
         Picked::Open(Choice::Item(Item::Entry(entry, _))) => {
             shell::launch(&entry.path)?;
-            record_entry(&files_history, &settings, &entry)?;
+            record_entry(files_history, settings, &entry)?;
             true
         }
         Picked::Open(Choice::Text(text)) => {
@@ -408,11 +425,15 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
         Picked::Open(Choice::Cancel) => false,
         Picked::Terminal(entry) => {
             shell::launch_in(&settings.terminal, &files::folder(Path::new(&entry.path))?)?;
-            record_entry(&files_history, &settings, &entry)?;
+            record_entry(files_history, settings, &entry)?;
             true
         }
-    };
-    // After the picker closes, since listing beside it slowed its startup by tens of ms.
+    })
+}
+
+/// Lists again and saves each cache the picker showed. Runs after the picker closes, since listing beside it slowed
+/// its startup by tens of ms.
+fn relist(found: &Found, settings: &Settings) -> Result<(), Error> {
     if settings.apps_cache {
         refresh(found.apps.as_ref(), apps::list, |apps| {
             apps::save(&apps::cache_path()?, apps)
@@ -425,7 +446,7 @@ fn search(config: Config, start: Kind) -> Result<bool, Error> {
             |entries| files::save(&files::cache_path()?, entries),
         )?;
     }
-    Ok(picked)
+    Ok(())
 }
 
 /// Saves the apps history at `path` with one more launch of `app`.
@@ -468,10 +489,12 @@ fn chain(error: &dyn std::error::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::os::windows::ffi::OsStringExt;
+
     use super::*;
 
     fn parsed(args: &[&str]) -> Result<Request, Usage> {
-        parse(args.iter().map(|&arg| arg.to_owned()).collect())
+        parse(args.iter().map(OsString::from).collect())
     }
 
     #[test]
@@ -502,13 +525,36 @@ mod tests {
         assert_eq!(parsed(&[]), Err(Usage::Missing));
         assert_eq!(parsed(&["--config", "c.toml"]), Err(Usage::Missing));
         assert_eq!(parsed(&["--config"]), Err(Usage::NoConfigPath));
-        assert_eq!(parsed(&["show"]), Err(Usage::NotAMode("show".to_owned())));
+        assert_eq!(
+            parsed(&["show"]),
+            Err(Usage::NotAMode(OsString::from("show")))
+        );
         assert_eq!(
             parsed(&["apps", "files"]),
             Err(Usage::Unexpected(vec![
-                "apps".to_owned(),
-                "files".to_owned()
+                OsString::from("apps"),
+                OsString::from("files")
             ]))
+        );
+    }
+
+    #[test]
+    fn an_argument_that_is_not_unicode_is_kept_whole() {
+        let lone = OsString::from_wide(&[0xd800]);
+        assert_eq!(
+            parse(vec![lone.clone()]),
+            Err(Usage::NotAMode(lone.clone()))
+        );
+        assert_eq!(
+            parse(vec![
+                OsString::from("--config"),
+                lone.clone(),
+                OsString::from("apps")
+            ]),
+            Ok(Request::Run {
+                config: Some(PathBuf::from(lone)),
+                mode: Mode::Apps
+            })
         );
     }
 }
