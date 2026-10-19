@@ -11,7 +11,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::clipboard::clipboard;
-use super::{Action, State, candidates, finish, render, with};
+use super::fetcher::WM_FETCHED;
+use super::{Action, State, arrived, candidates, finish, render, with};
 use crate::error::Error;
 use crate::menu::{self, Choice, Line};
 
@@ -41,6 +42,7 @@ pub(super) extern "system" fn window_proc(
         }
         // DefWindowProcW would destroy the window, which only `browse` may do.
         WM_CLOSE => finish(Ok(Action::Pick(Choice::Cancel))),
+        WM_FETCHED => arrived(),
         // SAFETY: passes on the message this procedure received, unchanged.
         _ => return unsafe { DefWindowProcW(window, message, wparam, lparam) },
     };

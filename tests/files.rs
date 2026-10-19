@@ -6,11 +6,13 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+use std::thread::sleep;
+use std::time::Duration;
 
 use carronade::error::Error as CarronadeError;
 use carronade::{files, icons, shell};
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, SetFileAttributesW};
-use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_TAB};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN, VK_TAB};
 use windows::core::HSTRING;
 
 use common::{CONFIG, Outcome, Picker, carronade, turn};
@@ -177,28 +179,34 @@ fn tab_in_apps_searches_the_files_for_the_query_typed() -> Outcome {
     })
 }
 
+#[test]
+fn an_icon_the_shell_gives_while_the_picker_is_open_is_saved() -> Outcome {
+    let _turn = turn();
+    // Named per run, so `icons.bin` cannot hold it already.
+    let name = format!("icon-{}.txt", std::process::id());
+    let root = fixture("files-icon", &[&name])?;
+    let mut command = carronade(&files_config(&root)?);
+    command.arg("files");
+    let picker = Picker::open(command, "")?;
+    sleep(FETCH_WAIT);
+    picker.press(VK_ESCAPE)?;
+    let exit = picker.exit()?;
+    assert_eq!(exit.code, Some(1), "{}", exit.stderr);
+    let target = root.join(&name);
+    let target = target.to_str().ok_or("path is not Unicode")?;
+    let saved = icons::load(&icons::path()?)?;
+    assert!(saved.iter().any(|icon| icon.target == target));
+    Ok(())
+}
+
+/// How long the picker gets to fetch one icon on its own thread, far above the shell's ~80 ms, for a busy runner.
+const FETCH_WAIT: Duration = Duration::from_secs(2);
+
 /// Opens `mode` over a folder holding a deep `run.exe`, with no caches, and picks it with `keys`.
 fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome) -> Outcome {
     let _turn = turn();
     let root = fixture(name, &["kit/tests/integration/run.exe", "kit/run.txt"])?;
-    let config = root.with_extension("toml");
-    // A checkout with core.autocrlf, as on the CI runner, has CRLF line ends.
-    let shipped = std::fs::read_to_string(CONFIG)?.replace("\r\n", "\n");
-    let roots = "roots = ['~\\dev']\ncache = true";
-    let apps = "[apps]\ncache = true";
-    for section in [roots, apps] {
-        if !shipped.contains(section) {
-            return Err(format!("the shipped config has no {section:?}").into());
-        }
-    }
-    let text = shipped
-        .replace(
-            roots,
-            &format!("roots = ['{}']\ncache = false", root.display()),
-        )
-        .replace(apps, "[apps]\ncache = false");
-    std::fs::write(&config, text)?;
-    let mut command = carronade(config.to_str().ok_or("config path is not Unicode")?);
+    let mut command = carronade(&files_config(&root)?);
     command.arg(mode);
     let picker = Picker::open(command, "")?;
     keys(&picker)?;
@@ -220,4 +228,29 @@ fn picks_the_deep_file(name: &str, mode: &str, keys: impl Fn(&Picker) -> Outcome
         exit.stderr
     );
     Ok(())
+}
+
+/// A copy of the shipped config beside `root` that lists only `root` and caches nothing.
+fn files_config(root: &Path) -> Result<String, Box<dyn Error>> {
+    let config = root.with_extension("toml");
+    // A checkout with core.autocrlf, as on the CI runner, has CRLF line ends.
+    let shipped = std::fs::read_to_string(CONFIG)?.replace("\r\n", "\n");
+    let roots = "roots = ['~\\dev']\ncache = true";
+    let apps = "[apps]\ncache = true";
+    for section in [roots, apps] {
+        if !shipped.contains(section) {
+            return Err(format!("the shipped config has no {section:?}").into());
+        }
+    }
+    let text = shipped
+        .replace(
+            roots,
+            &format!("roots = ['{}']\ncache = false", root.display()),
+        )
+        .replace(apps, "[apps]\ncache = false");
+    std::fs::write(&config, text)?;
+    Ok(config
+        .to_str()
+        .ok_or("config path is not Unicode")?
+        .to_owned())
 }

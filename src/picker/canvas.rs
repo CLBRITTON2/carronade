@@ -44,7 +44,6 @@ pub(super) struct Canvas {
     /// The matched letters' color, its own brush since a text layout keeps the brush, not its color.
     pub(super) highlight: ID2D1SolidColorBrush,
     pub(super) dwrite: IDWriteFactory,
-    pub(super) wic: IWICImagingFactory,
     pub(super) text: IDWriteTextFormat,
     pub(super) prompt: IDWriteTextFormat,
     /// The prompt font, centered for the switch icon.

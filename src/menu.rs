@@ -43,6 +43,17 @@ pub(crate) fn filter<'a>(
 
 /// `item`'s rank in `filter`, or `None` when a term rules it out.
 fn score(item: &Candidate, terms: &[Term]) -> Option<i32> {
+    let possible = |term: &Term| {
+        term.negated
+            || in_order(&item.label, term)
+            || item
+                .alias
+                .as_deref()
+                .is_some_and(|alias| in_order(alias, term))
+    };
+    if !terms.iter().all(possible) {
+        return None;
+    }
     let label = letters(&item.label);
     let alias = item.alias.as_deref().map(letters);
     let scores: Option<i32> = terms
@@ -58,6 +69,15 @@ fn score(item: &Candidate, terms: &[Term]) -> Option<i32> {
         })
         .sum();
     scores.map(|score| score + item.boost)
+}
+
+/// Whether `term`'s letters occur in `text` in order, which every kind of match needs. One pass with no allocation, so
+/// it rules most items out before `letters` and `fuzzy` build their tables, as fzf's `asciiFuzzyIndex` does.
+fn in_order(text: &str, term: &Term) -> bool {
+    let mut chars = text.chars().map(lower);
+    term.letters
+        .iter()
+        .all(|wanted| chars.any(|letter| letter == *wanted))
 }
 
 /// The char positions in `item` of the letters the terms of `query` matched in `filter`, ascending.
@@ -536,6 +556,15 @@ mod tests {
         assert_eq!(filter(&apps, "twsh"), [2, 0, 1]);
         assert_eq!(filter(&apps, "twsh 7"), [0]);
         assert_eq!(filter(&apps, "shell !twsh"), [1]);
+    }
+
+    #[test]
+    fn a_word_only_in_the_alias_matches() {
+        let apps = [
+            candidate("Shell Prompt", Some("tsh"), 0),
+            candidate("Shell Notes", None, 0),
+        ];
+        assert_eq!(filter(&apps, "TSH"), [0]);
     }
 
     #[test]

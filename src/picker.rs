@@ -2,6 +2,7 @@
 //! corners and translucent colors blend with the desktop.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
@@ -49,9 +50,11 @@ use crate::menu::{self, Candidate, Choice, Line};
 use crate::platform;
 use crate::store::{self, UnixSeconds};
 use canvas::{Canvas, MemoryDc, d2d_color, d2d_rect, format, image, measure, rounded};
+use fetcher::{Fetched, Fetcher};
 
 mod canvas;
 mod clipboard;
+mod fetcher;
 mod input;
 
 const CLASS: PCWSTR = w!("carronade");
@@ -152,6 +155,12 @@ struct State {
     cache: Option<Vec<Cached>>,
     /// The icons the shell gave this run, for `icons.bin` when the picker closes.
     fetched: Vec<Cached>,
+    /// Started when a page first needs an icon that neither `fetched` nor `cache` holds.
+    fetcher: Option<Fetcher>,
+    /// The targets asked of `fetcher`, so none is asked twice.
+    asked: HashSet<String>,
+    /// The targets the shell had no item for.
+    gone: HashSet<String>,
     canvas: Canvas,
 }
 
@@ -311,10 +320,7 @@ fn prepare(config: Config) -> Result<Prepared, Error> {
     // SAFETY: takes only a factory type constant.
     let dwrite: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
         .map_err(win32("DWriteCreateFactory"))?;
-    // SAFETY: `platform::com` initialized COM on this thread above.
-    let wic: IWICImagingFactory =
-        unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
-            .map_err(win32("CoCreateInstance(WICImagingFactory)"))?;
+    let wic = wic()?;
     let formats = formats(&dwrite, &config, em, scale)?;
     let placeholder = measure(&dwrite, &formats.text, &config.input.placeholder)?;
     let prompted = measure(&dwrite, &formats.prompt, &config.input.prompt)?;
@@ -347,6 +353,13 @@ fn prepare(config: Config) -> Result<Prepared, Error> {
         width,
         height,
     })
+}
+
+/// A WIC factory for the calling thread, which `platform::com` must have initialized.
+fn wic() -> Result<IWICImagingFactory, Error> {
+    // SAFETY: takes a class id and an interface the call fills, with no outer object.
+    unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
+        .map_err(win32("CoCreateInstance(WICImagingFactory)"))
 }
 
 /// Draws the first frame of `items` into `window` and shows it in front.
@@ -394,6 +407,9 @@ fn open(
         wheel: 0,
         cache: None,
         fetched: Vec::new(),
+        fetcher: None,
+        asked: HashSet::new(),
+        gone: HashSet::new(),
         canvas: Canvas {
             window,
             origin,
@@ -401,7 +417,6 @@ fn open(
             brush,
             highlight,
             dwrite,
-            wic,
             text: formats.text,
             prompt: formats.prompt,
             icon: formats.icon,
@@ -650,47 +665,23 @@ fn with<T>(f: impl FnOnce(&mut State) -> T) -> Result<T, Error> {
     })
 }
 
-/// Loads the icons of the page on show, from `icons.bin` while they are fresh there, then draws it.
+/// Draws the page with the icons at hand, from this run, `icons.bin` while they are fresh there, or the shell, and asks
+/// `fetcher` for the rest, which come back through `arrived`.
 fn render() -> Result<(), Error> {
-    let (pending, side, wic) = with(|state| {
-        let canvas = &state.canvas;
-        (state.unloaded(), canvas.icon_size(), canvas.wic.clone())
-    })?;
-    if !pending.is_empty() && with(|state| state.cache.is_none())? {
+    if with(|state| state.cache.is_none() && !state.unloaded().is_empty())? {
         let cache = icons::load(&icons::path()?)?;
         with(|state| state.cache = Some(cache))?;
     }
     let now = store::now()?;
-    for (index, target) in pending {
-        let pixels = if let Some(pixels) = with(|state| state.cached(&target, side, now))? {
-            pixels
-        } else {
-            // Outside the borrow: the shell pumps messages while it loads.
-            let pixels = match icons::fetch(&wic, &target, side) {
-                Ok(pixels) => pixels,
-                // The relist after the picker closes drops it from the cache.
-                Err(Error::NoItem { .. }) => {
-                    with(|state| state.set_icon(index, Icon::Gone))?;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
-            let fetched = Cached {
-                target,
-                fetched: now,
-                pixels: pixels.clone(),
-            };
-            with(|state| state.fetched.push(fetched))?;
-            pixels
-        };
-        with(|state| {
-            state
-                .canvas
-                .bitmap(&pixels)
-                .map(|bitmap| state.set_icon(index, Icon::Loaded(bitmap)))
-        })??;
-    }
+    with(|state| state.resolve(now))??;
     with(State::draw)?
+}
+
+/// Takes in the icons `fetcher` finished since the last `WM_FETCHED`, then draws the page with them.
+fn arrived() -> Result<(), Error> {
+    let now = store::now()?;
+    with(|state| state.take_fetched(now))??;
+    render()
 }
 
 impl State {
@@ -722,6 +713,56 @@ impl State {
                 },
             )
             .collect()
+    }
+
+    /// Gives each unloaded icon on the page the one at hand, and asks `fetcher` for those it has not been asked for.
+    fn resolve(&mut self, now: UnixSeconds) -> Result<(), Error> {
+        let side = self.canvas.icon_size();
+        let mut wanted = Vec::new();
+        for (index, target) in self.unloaded() {
+            if self.gone.contains(&target) {
+                self.set_icon(index, Icon::Gone);
+            } else if let Some(pixels) = self.cached(&target, side, now) {
+                let bitmap = self.canvas.bitmap(&pixels)?;
+                self.set_icon(index, Icon::Loaded(bitmap));
+            } else if self.asked.insert(target.clone()) {
+                wanted.push(target);
+            }
+        }
+        if wanted.is_empty() {
+            return Ok(());
+        }
+        let fetcher = match self.fetcher.take() {
+            Some(fetcher) => fetcher,
+            None => Fetcher::start(self.canvas.window, side)?,
+        };
+        let requested = wanted
+            .into_iter()
+            .try_for_each(|target| fetcher.request(target));
+        self.fetcher = Some(fetcher);
+        requested
+    }
+
+    /// Moves what `fetcher` finished into `fetched` and `gone`, or returns the first fetch that failed.
+    fn take_fetched(&mut self, now: UnixSeconds) -> Result<(), Error> {
+        let received = self
+            .fetcher
+            .as_ref()
+            .map(Fetcher::received)
+            .unwrap_or_default();
+        for result in received {
+            match result? {
+                Fetched::Icon { target, pixels } => self.fetched.push(Cached {
+                    target,
+                    fetched: now,
+                    pixels,
+                }),
+                Fetched::Gone(target) => {
+                    self.gone.insert(target);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn show(&mut self, items: Vec<Listed>, switch: String) {
@@ -874,8 +915,8 @@ impl State {
                     cell.label
                 }
                 // Blank, so the label lines up with its neighbors' that have icons.
-                Some(Icon::Gone) => cell.label,
-                None | Some(Icon::Unloaded(_)) => Rect {
+                Some(Icon::Gone | Icon::Unloaded(_)) => cell.label,
+                None => Rect {
                     left: cell.icon.left,
                     ..cell.label
                 },

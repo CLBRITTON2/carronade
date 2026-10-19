@@ -99,6 +99,12 @@ pub enum Error {
         #[source]
         source: windows::core::Error,
     },
+    #[error("starting the icon thread failed")]
+    IconThread(#[source] std::io::Error),
+    #[error("the icon thread ended before it was ready")]
+    IconThreadEnded,
+    #[error("the icon thread ended before fetching {target:?}")]
+    IconRequest { target: String },
     #[error("the shell's icon of {target:?} is not a 32-bit bitmap")]
     IconBitmap { target: String },
     #[error("the icon of {target:?} at {side} px is too large to hold")]
