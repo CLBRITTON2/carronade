@@ -16,6 +16,7 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 - A cache in `%LOCALAPPDATA%\carronade\` written by another carronade version is listed again and overwritten. It
   used to stop the picker from opening. A history from another version still fails to load, since it cannot be
   listed again.
+- carronade starts on a Windows without the Visual C++ redistributable. It used to fail with 0xC0000135.
 
 ## [0.4.0] - 2026-10-05
 
