@@ -13,6 +13,9 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 - A cached app or file deleted since it was listed drops out of the cache when picking it fails too. It used to stay
   until a run that ended without an error.
 - A command-line argument that is not valid Unicode is a usage error naming it. It used to crash carronade.
+- A cache in `%LOCALAPPDATA%\carronade\` written by another carronade version is listed again and overwritten. It
+  used to stop the picker from opening. A history from another version still fails to load, since it cannot be
+  listed again.
 
 ## [0.4.0] - 2026-10-05
 

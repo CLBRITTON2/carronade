@@ -108,9 +108,9 @@ pub fn cache_path() -> Result<PathBuf, Error> {
     store::path("apps.toml")
 }
 
-/// The apps `save` wrote to `path`, or `None` before the first save.
+/// The apps `save` wrote to `path`, or `None` before the first save or after another version's.
 pub fn load(path: &Path) -> Result<Option<Vec<App>>, Error> {
-    Ok(store::load::<Cache>(path, VERSION)?.map(|cache| cache.app))
+    Ok(store::load_cache::<Cache>(path, VERSION)?.map(|cache| cache.app))
 }
 
 pub fn save(path: &Path, apps: &[App]) -> Result<(), Error> {

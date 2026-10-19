@@ -66,17 +66,23 @@ pub const MAX_AGE_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// Changes whenever the layout below does.
 const MAGIC: &[u8; 8] = b"carric01";
+/// The start of `MAGIC` every version shares, which tells a cache another version wrote from a corrupt one.
+const FAMILY: &[u8; 6] = b"carric";
 
 /// `%LOCALAPPDATA%\carronade\icons.bin`.
 pub fn path() -> Result<PathBuf, Error> {
     store::path("icons.bin")
 }
 
-/// The icons `save` wrote to `path`, most recently fetched first. Empty before the first save.
+/// The icons `save` wrote to `path`, most recently fetched first. Empty before the first save, and after another
+/// version's, which the next save overwrites.
 pub fn load(path: &Path) -> Result<Vec<Cached>, Error> {
     let Some(bytes) = store::read(path)? else {
         return Ok(Vec::new());
     };
+    if bytes.starts_with(FAMILY) && !bytes.starts_with(MAGIC) {
+        return Ok(Vec::new());
+    }
     decode(&bytes).ok_or_else(|| Error::IconCache {
         path: path.to_owned(),
     })
@@ -353,6 +359,22 @@ mod tests {
         std::fs::remove_file(&path)?;
         assert!(
             matches!(&result, Err(Error::IconCache { path: failed }) if *failed == path),
+            "got {result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_cache_from_another_version_loads_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "carronade-icons-other-version-{}.bin",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"carric99 a later layout")?;
+        let result = load(&path);
+        std::fs::remove_file(&path)?;
+        assert!(
+            matches!(&result, Ok(icons) if icons.is_empty()),
             "got {result:?}"
         );
         Ok(())

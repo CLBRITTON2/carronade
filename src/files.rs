@@ -84,9 +84,9 @@ pub fn cache_path() -> Result<PathBuf, Error> {
     store::path("files.toml")
 }
 
-/// The entries `save` wrote to `path`, or `None` before the first save.
+/// The entries `save` wrote to `path`, or `None` before the first save or after another version's.
 pub fn load(path: &Path) -> Result<Option<Vec<Entry>>, Error> {
-    Ok(store::load::<Cache>(path, VERSION)?.map(|cache| cache.entry))
+    Ok(store::load_cache::<Cache>(path, VERSION)?.map(|cache| cache.entry))
 }
 
 pub fn save(path: &Path, entries: &[Entry]) -> Result<(), Error> {

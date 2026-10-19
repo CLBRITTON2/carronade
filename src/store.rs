@@ -72,6 +72,18 @@ pub(crate) fn load<T: DeserializeOwned>(path: &Path, version: i64) -> Result<Opt
     table.try_into().map(Some).map_err(parse)
 }
 
+/// What `load` reads from the cache at `path`, or `None` when another carronade version wrote it. A cache only speeds up
+/// opening, so listing again and overwriting it beats refusing to open.
+pub(crate) fn load_cache<T: DeserializeOwned>(
+    path: &Path,
+    version: i64,
+) -> Result<Option<T>, Error> {
+    match load(path, version) {
+        Err(Error::StoreVersion { .. }) => Ok(None),
+        loaded => loaded,
+    }
+}
+
 /// Writes `value` at `version` for `load`, through a temporary file so a reader never sees half of it.
 pub(crate) fn save<T: Serialize>(path: &Path, version: i64, value: &T) -> Result<(), Error> {
     let serialize = |source| Error::StoreSerialize {
@@ -131,6 +143,16 @@ mod tests {
             matches!(&result, Err(Error::StoreParse { path: failed, .. }) if *failed == path),
             "got {result:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_cache_from_another_version_loads_as_none() -> Result<(), Box<dyn std::error::Error>> {
+        let path = scratch("other-version.toml");
+        std::fs::write(&path, "version = 2\n")?;
+        let result = load_cache::<Table>(&path, 1);
+        std::fs::remove_file(&path)?;
+        assert!(matches!(result, Ok(None)), "got {result:?}");
         Ok(())
     }
 
